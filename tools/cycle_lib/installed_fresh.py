@@ -221,10 +221,8 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_SHA = 'a2674b9e4ff8107dbe352a4acf
 # (-DADRENO_GPU_RECOVER=1): AdrenoX2 73b4b8da, agents/gpu-recovery/build/build-auxkc-recover.sh VARIANT=pipe.
 # Boot with --present-latch --present-pipeline 1 --ib-async --gpu-recover soft. Rollback: latch2-sync-nosparse
 # f930bc2154ebea37b7c19be785ee4dafe7c1a360f20cd78541e67d4a54c51968 (b12v12/b12v13/b12v16, no pipeline).
-INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH = ('build/current-assets/auxkc-input-ptp-dartpool-resident-beam-va-wide-'
-                                                        'latch2-pipe2-recover-relatch-sparse-repin-cursor-'
-                                                        'coherent-v3-20261023/adreno-input.kc')
-INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'bd057773a8524ddbd0d0ab1148263257728e1ddf5e06a189dc18d1ff33c47893'
+INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH = 'build/current-assets/org-desktop-nocoherent-20261023/adreno-input.kc'
+INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'ccf0c8f4da4f63fbe25c2b74d728030452fea1ab23fcab162d108dc0e36d1592'
 # b12v23 (2026-10-23): + IO-coherent maintenance skipping (AdrenoX2 c66edb6b = SnapAdreno PROFILE=desktop at its profiles
 # commit; SnapI2CHID d90e0199 = PROFILE=desktop); boot with --gpu-coherent. Previous: cursor 43bed810 (AdrenoX2
 # 981e0b88 = PROFILE=desktop-nocoherent), b12v19c-b12v20. tools/build-auxkc-desktop.sh NAME rebuilds a collection from
