@@ -272,6 +272,36 @@ in the desktop AdrenoX2 profiles, is off unless the guest boots with
 adds (`tools/test-adreno-cs-samplers.py`). An AdrenoX2 built without the define
 ignores the boot-arg.
 
+## Checking icon pixels on the GPU
+
+The encoding tests check the plug-in's packets, not what the Adreno GPU makes of
+them. `icon-pixels` (SnapMetal `harness/icon-pixels*.m`, built and ad-hoc signed
+by `tools/build-icon-pixels.py`) runs the CoreImage kernels of the Settings
+icons in the guest on generated inputs (`synth`) and renders a few system icons
+(`icons`), printing CRC-sealed text lines that `tools/compare-icon-pixels.py`
+compares with this Mac's, naming what is off: unwritten or partial output,
+readback or repeat differences, swapped channels, sRGB decode, a missing input
+of a multi-input kernel. During a `--console` boot, once the multi-user shell
+answers, as the run's only console client:
+
+```sh
+python3 tools/run-icon-pixels.py --device udp://<interface> \
+    --launch-record build/<run-prefix>-early-stop-launch.json --owner <hex> \
+    --tool <build-dir>/icon-pixels --output <new-dir> \
+    --reference-synth tools/icon-pixels-reference-synth.txt --reference-icons <local icons reference>
+```
+
+It pushes the tool in checked base64 chunks to `/private/var/tmp/icon-pixels`,
+runs it as root and, for the NSWorkspace icons, as the console user in that
+user's bootstrap context, fetches the output three lines per command, collects
+the plug-in's diagnostics, and compares. `--steps` picks steps; `recache` with
+`--move-icon-caches TAG` renames the icon caches aside in multi-user and
+restarts iconservicesd, iconservicesagent, the Dock and System Settings. The
+synthetic reference is committed; the icons reference summarises Apple's icons
+and stays local (`icon-pixels icons --host-caps <plug-in bundle>` on this Mac).
+`tools/test-icon-pixels.py` is the offline test (fault injection and the whole
+console procedure over the stand-in).
+
 ## Exit codes
 
 A boot reports why the guest stopped:
