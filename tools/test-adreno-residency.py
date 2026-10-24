@@ -657,5 +657,114 @@ class Replays(unittest.TestCase):
                 self.assertTrue(result.stdout.strip().splitlines()[-1].startswith('PASS'), result.stdout[-500:])
 
 
+# agents/display-modeset: the head rule (compat/adreno-resource-tail.h, -DADRENO_RESIDENT_HEAD_OFFSET=1 with
+# ADRENO_RESIDENT_REPIN). org2 and b12v23: WindowServer's 16 KiB buffer at a page-unaligned address under IOGPU's 32 KiB
+# map, refused -83 at the onset of the Displays-pane glitch, then every composite listing it failed (-115).
+TAIL = ROOT / 'compat/adreno-resource-tail.h'
+REPIN = ['-DADRENO_RESIDENT_REPIN=1']
+HEAD = REPIN + ['-DADRENO_RESIDENT_HEAD_OFFSET=1']
+# Each weakens one head rule; scenario 33 (org2's buffer) or 34 (refusals, head-0 equivalence) must notice.
+HEAD_MUTANTS = {
+    'admission without the page bound': (
+        '           logical <= adreno_tail_round_page(head + bytes);\n}', '           1;\n}'),
+    'first page not moved back to its start': (
+        'lead = offset ? 0 : head;', 'lead = 0;'),
+    'last page not mapped whole': (
+        '*length = span == bytes - at ? adreno_tail_round_page(head + bytes) - offset : span + lead;',
+        '*length = span + lead;'),
+    'a misplaced segment accepted': (
+        'pa < lead || ((pa - lead) & (ADRENO_TAIL_PAGE - 1)))', 'pa < lead)'),
+    'descriptor offset ignores the head': (
+        '    return offset ? offset - head : 0;', '    return offset;'),
+    'partial first line only invalidated': (
+        '(stop < lead ? stop : lead) - start, ADRENO_CACHE_TO_DEVICE};',
+        '(stop < lead ? stop : lead) - start, direction};'),
+    'maintenance from the map start, not the first line': (
+        '    const uint64_t start = offset > first ? offset : first;', '    const uint64_t start = offset;'),
+    'client offset not moved by the head': ('    *map_offset = head + offset;', '    *map_offset = offset;'),
+    'client range bounded by the map, not the descriptor': (
+        'offset > bytes || len > bytes - offset) return 0;',
+        'offset > bytes + head || len > bytes + head - offset) return 0;'),
+}
+
+
+def run_repin(directory, extra, header=None):
+    """Build the model with `extra` (and a replacement adreno-resource-tail.h when given) and run its re-pin part."""
+    include = []
+    if header is not None:
+        (Path(directory) / 'adreno-resource-tail.h').write_text(header)
+        include = ['-I' + str(directory)]
+    exe = Path(directory) / 'test-adreno-residency'
+    subprocess.run(['cc', *FLAGS, *MUTANT_FLAGS, *extra, *include, '-Icompat', str(HARNESS), str(CORE), '-o', str(exe)],
+                   cwd=ROOT, check=True, timeout=300, capture_output=True)
+    return subprocess.run([str(exe), 'repin'], capture_output=True, text=True, timeout=600)
+
+
+class HeadOffset(unittest.TestCase):
+    def test_org2_buffer_refused_without_the_rule(self):
+        # The re-pin build alone: scenario 33 asserts the clean refusal (E_PIN) and a refused submission every round.
+        with tempfile.TemporaryDirectory() as d:
+            result = run_repin(d, REPIN)
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertIn('PASS: repin', result.stdout)
+        self.assertNotIn('PASS head', result.stdout)
+
+    def test_org2_buffer_admitted_and_mapped_with_the_rule(self):
+        with tempfile.TemporaryDirectory() as d:
+            result = run_repin(d, HEAD)
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertIn('PASS head', result.stdout)
+        self.assertIn('PASS: repin', result.stdout)
+
+    def test_weakened_head_rules_fail(self):
+        header = TAIL.read_text()
+        for name, (old, new) in HEAD_MUTANTS.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                self.assertEqual(header.count(old), 1, name)
+                result = run_repin(d, HEAD, header.replace(old, new))
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertNotIn('PASS: repin', result.stdout, name)
+
+    def test_kext_glue_uses_the_rule_behind_its_define(self):
+        source = read_source(MAP)
+        pin = between(source, 'int AdrenoMemoryMap::pinBacking(void *ctx)')
+        self.assertIn('adreno_head_fit(bytes, map->fResource.logical_length)', pin)
+        self.assertIn('map->admitHead(backing, direction, bytes, &head)', pin)
+        self.assertLess(pin.index('backing->prepare(direction)'), pin.index('map->admitHead('))   # head known once wired
+        physical = between(source, 'uint64_t AdrenoMemoryMap::physicalPage(')
+        self.assertIn('adreno_head_run(offset, map->fBackingHead, map->fBackingBytes, pa, span, length)', physical)
+        self.assertIn('adreno_head_descriptor_offset(offset, map->fBackingHead)', physical)
+        admit = between(source, 'bool AdrenoMemoryMap::admitHead(')
+        self.assertIn('adreno_head_admit(*head, bytes, fResource.logical_length)', admit)
+        self.assertLess(admit.index('backing->complete(direction)'), admit.index('backing->release()'))
+        for method in ('int AdrenoMemoryMap::resolveFill(', 'int AdrenoMemoryMap::resolveRange(',
+                       'int AdrenoMemoryMap::cacheRange('):
+            self.assertIn('headRange(offset,bytes,&at)', between(source, method), method)
+        self.assertIn('adreno_head_cache(&fResource,fBackingHead,fBackingBytes,direction,0,fResource.logical_length',
+                      between(source, 'int AdrenoMemoryMap::cacheSubmission('))
+        self.assertIn('map->fBackingHead = 0;', between(source, 'int AdrenoMemoryMap::unpinBacking('))
+        # Every head-rule identifier sits inside #if ADRENO_RESIDENT_HEAD_OFFSET (the define-off build is unchanged).
+        words = ('fBackingHead', 'admitHead', 'headRange', 'headOffsetWanted', 'adreno_head_', 'kRepinHead', 'gHead')
+        for name, text in (('AdrenoMemoryMap', source), ('AdrenoX2.h', (KEXT / 'src/AdrenoX2.h').read_text())):
+            inside = []
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith('#if'):
+                    inside.append('ADRENO_RESIDENT_HEAD_OFFSET' in stripped)
+                elif stripped.startswith(('#elif', '#else')) and inside:
+                    inside[-1] = 'ADRENO_RESIDENT_HEAD_OFFSET' in stripped and stripped.startswith('#elif')
+                elif stripped.startswith('#endif'):
+                    inside.pop()
+                elif any(word in line for word in words) and not stripped.startswith('//'):
+                    self.assertTrue(any(inside), name + ': ' + line)
+
+    def test_desktop_profiles_build_the_rule_in_every_unit(self):
+        profile = (KEXT / 'profiles/desktop-nocoherent.sh').read_text()
+        common = re.search(r'^PROFILE_ALL="([^"]*)"', profile, re.M).group(1)
+        self.assertIn('-DADRENO_RESIDENT_HEAD_OFFSET=1', common.split())
+        self.assertIn('-DADRENO_RESIDENT_REPIN=1', common.split())
+        self.assertIn('. "$D/profiles/desktop-nocoherent.sh"', (KEXT / 'profiles/desktop.sh').read_text())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
