@@ -182,6 +182,18 @@ class Wiring(unittest.TestCase):
             ' adreno_backlight=1 adreno_backlight_mode=1'))
         with self.assertRaises(BaseException):
             f.boot_addition(types.SimpleNamespace(edp_backlight_mode=True))
+        # From the command line, as a run's argument list reaches installed-fresh.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('cycle_cli', ROOT / 'tools/cycle.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        base = ['installed-fresh', '--prefix', 'x', '--variant', 'fast', '--check']
+        self.assertNotIn('adreno_backlight=1', f.boot_addition(cli.parse(base)).split())
+        words = f.boot_addition(cli.parse(base + ['--edp-backlight'])).split()
+        self.assertIn('adreno_backlight=1', words)
+        self.assertNotIn('adreno_backlight_mode=1', words)
+        words = f.boot_addition(cli.parse(base + ['--edp-backlight', '--edp-backlight-mode'])).split()
+        self.assertEqual(words[-2:], ['adreno_backlight=1', 'adreno_backlight_mode=1'])
         src = (ROOT / 'tools/cycle_lib/installed_fresh.py').read_text()
         body = src[src.index('def variant_flags('):]
         body = body[:body.index('\n    return flags\n')]

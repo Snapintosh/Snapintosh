@@ -51,6 +51,13 @@ class InputFnKeys(unittest.TestCase):
                        '0x3'])
         self.assertEqual(a.input_fnkeys, 3)
 
+    def test_cli_value_reaches_the_boot_args(self):
+        base = ['installed-fresh', '--prefix', 'x', '--variant', 'fast', '--check', '--input']
+        for text, value in (('0x3', 3), ('3', 3), ('0x13', 19), ('0b111', 7)):
+            words = fresh.boot_addition(cli.parse(base + ['--input-fnkeys', text])).split()
+            self.assertEqual([w for w in words if w.startswith('snap_i2c_fnkeys=')], [f'snap_i2c_fnkeys={value}'], text)
+        self.assertFalse([w for w in fresh.boot_addition(cli.parse(base)).split() if w.startswith('snap_i2c_fnkeys')])
+
 
 if __name__ == '__main__':
     unittest.main()
