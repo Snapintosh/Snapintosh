@@ -36,7 +36,14 @@
  * min(255, s + round(u * (255 - a) / 255)) per byte). The PRECHANGE build models the
  * 7ec040b4 presentGated, which drops layers 1..3; its cursor run must fail.
  *
+ * `geometry` runs adreno_display_swap_geometry (AdrenoDisplayCopy.h): what a layer-0 swap asks that the 1:1, top-left
+ * copy does not do, as the kext's -DADRENO_DISPLAY_TRACE_MODES logs it (agents/display-modeset). The cases are the
+ * panel's own mode, macOS's scaled resolutions of a 2880x1800 panel (1280x800 to 1920x1200 points at 2x: the
+ * framebuffer is the points' size twice, presented to the full panel), a placed destination, a cropped source,
+ * negative rectangles and an unknown surface.
+ *
  *   test-adreno-display-present selftest
+ *   test-adreno-display-present geometry                       (prints a JSON line)
  *   test-adreno-display-present cursor                         (prints a JSON line)
  *   test-adreno-display-present surface DUMP.adsf PANEL.bin   (prints a JSON line)
  */
@@ -861,14 +868,47 @@ static int surface_mode(const char *dump_path, const char *panel_path)
     return e ? 1 : 0;
 }
 
+static int geometry_mode(void)
+{
+    enum { S = ADRENO_DISPLAY_GEOMETRY_SCALED, P = ADRENO_DISPLAY_GEOMETRY_PLACED, C = ADRENO_DISPLAY_GEOMETRY_CROPPED,
+           Z = ADRENO_DISPLAY_GEOMETRY_SIZED };
+    static const struct { int32_t sx, sy, sw, sh, dx, dy, dw, dh; uint64_t w, h; unsigned want; const char *what; } k[] = {
+        {0, 0, 2880, 1800, 0, 0, 2880, 1800, 2880, 1800, 0, "native 1440x900 at 2x"},
+        {0, 0, 2880, 1800, 0, 0, 2880, 1800, 0, 0, 0, "native, surface unknown"},
+        {0, 0, 2560, 1600, 0, 0, 2880, 1800, 2560, 1600, S | Z, "1280x800 at 2x (larger text)"},
+        {0, 0, 3360, 2100, 0, 0, 2880, 1800, 3360, 2100, S | Z, "1680x1050 at 2x (more space)"},
+        {0, 0, 3840, 2400, 0, 0, 2880, 1800, 3840, 2400, S | Z, "1920x1200 at 2x"},
+        {0, 0, 2048, 1280, 0, 0, 2880, 1800, 2048, 1280, S | Z, "1024x640 at 2x"},
+        {0, 0, 2880, 1800, 0, 0, 2880, 1800, 3360, 2100, C | Z, "a panel-sized source inside a larger surface"},
+        {0, 0, 1440, 900, 0, 0, 2880, 1800, 1440, 900, S | Z, "1440x900 at 1x, scaled up by the display"},
+        {0, 0, 1440, 900, 720, 450, 1440, 900, 1440, 900, P | Z, "unscaled, centred"},
+        {16, 8, 2880, 1800, 0, 0, 2880, 1800, 2896, 1808, C | Z, "source offset"},
+        {16, 8, 2880, 1800, 0, 0, 2880, 1800, 2880, 1800, C, "source origin past the surface's top-left"},
+        {0, 0, -1, 1800, 0, 0, -1, 1800, 2880, 1800, P | C, "negative width"},
+        {0, 0, 2880, 1800, 0, 0, 2880, 1800, 2880, 1792, C | Z, "surface one row short of its source"},
+    };
+    unsigned bad = 0;
+    for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++) {
+        const unsigned got = adreno_display_swap_geometry(k[i].sx, k[i].sy, k[i].sw, k[i].sh, k[i].dx, k[i].dy, k[i].dw,
+                                                          k[i].dh, k[i].w, k[i].h, 2880, 1800);
+        CHECK(got == k[i].want);
+        if (got != k[i].want) { bad++; fprintf(stderr, "geometry %s: 0x%x, want 0x%x\n", k[i].what, got, k[i].want); }
+    }
+    printf("{\"variant\":\"%s\",\"geometry_cases\":%u,\"failures\":%u}\n", VARIANT,
+           (unsigned)(sizeof k / sizeof k[0]), bad);
+    return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "geometry"))
+        return geometry_mode();
     if (argc >= 3 && !strcmp(argv[1], "surface"))
         return surface_mode(argv[2], argc > 3 ? argv[3] : NULL);
     if (argc == 2 && !strcmp(argv[1], "cursor"))
         return cursor_mode();
     if (argc != 2 || strcmp(argv[1], "selftest")) {
-        fprintf(stderr, "usage: %s selftest | cursor | surface DUMP [PANEL]\n", argv[0]);
+        fprintf(stderr, "usage: %s selftest | geometry | cursor | surface DUMP [PANEL]\n", argv[0]);
         return 64;
     }
     case_full_panel_stale_cache();
