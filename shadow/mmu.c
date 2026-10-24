@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* See mmu.h. */
 #include "mmu.h"
+#include <string.h>
 
 /* Index bits per level. A table is one granule of 8-byte entries, so a 16K
  * granule indexes 11 bits per level and a 4K granule 9 -- which is why the 16K
@@ -19,13 +20,19 @@ static uint32_t level_shift(uint32_t granule_shift, uint32_t level)
 
 uint64_t mmu_level_size(uint32_t granule_shift, uint32_t level)
 {
-    return 1UL << level_shift(granule_shift, level);
+    if (granule_shift < 12 || granule_shift > 16 || level > 3) return 0;
+    uint32_t shift = level_shift(granule_shift, level);
+    if (shift >= 64) return 0;
+    return 1ULL << shift;
 }
 
 uint32_t mmu_index(uint32_t granule_shift, uint32_t level, uint64_t va)
 {
+    if (granule_shift < 12 || granule_shift > 16 || level > 3) return 0;
     uint32_t bits = index_bits(granule_shift);
-    return (uint32_t)((va >> level_shift(granule_shift, level)) & ((1UL << bits) - 1));
+    uint32_t shift = level_shift(granule_shift, level);
+    if (shift >= 64) return 0;
+    return (uint32_t)((va >> shift) & ((1ULL << bits) - 1));
 }
 
 int mmu_block_allowed(uint32_t granule_shift, uint32_t level)
@@ -53,7 +60,8 @@ int mmu_start_level(uint32_t granule_shift, uint32_t txsz)
 int mmu_walk(const struct mmu_config *cfg, uint64_t va, mmu_read_fn read, void *ctx,
              struct mmu_leaf *out)
 {
-    for (unsigned n = 0; n < sizeof(*out); n++) ((uint8_t *)out)[n] = 0;
+    if (!cfg || !read || !out) return -1;
+    memset(out, 0, sizeof(*out));
 
     if (cfg->granule_shift != 12 && cfg->granule_shift != 14 && cfg->granule_shift != 16)
         return -1;

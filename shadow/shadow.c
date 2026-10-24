@@ -66,14 +66,25 @@ int shadow_reserve(struct shadow *s, uint64_t va, uint64_t size)
 int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
                uint64_t low, uint64_t upper)
 {
+    if (!s || !s->read || !s->write || !s->alloc || s->txsz < 16 || s->txsz > 39) return -1;
     if ((va | pa | size) & 0xfff) return -1;
+    if (!size) return 0;
+
+    uint64_t limit = 1ULL << (64 - s->txsz);
+    if (va >= limit || size > limit - va) return -1;
 
     /* The contiguous hint describes a run of 16 entries in the granule that
      * declared it. Carrying it across granules would promise the TLB a
      * contiguity the shadow does not have, so it is dropped. */
     low &= PT_LEAF_ATTRS;
     upper &= PT_LEAF_UPPER;
-    if (s->admit && !s->admit(s->ctx,va,pa,size,low,upper)) return -1;
+    if (s->admit && !s->admit(s->ctx, va, pa, size, low, upper)) return -1;
+
+    /* Fast path: cache the current level-3 table PA and its 2 MiB VA window.
+     * Consecutive 4K page mappings in the same 2 MiB boundary reuse the L3
+     * table without traversing L0..L2 from root every single page. */
+    uint64_t cached_l3_table = 0;
+    uint64_t cached_l3_base = UINT64_MAX;
 
     while (size) {
         uint32_t level = 3;
@@ -92,8 +103,24 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
 
         /* Level 3 leaves set bit 1; blocks at levels 1 and 2 clear it. */
         uint64_t descriptor = (pa & PT_OA_MASK) | low | upper | PT_VALID;
-        if (level == 3) descriptor |= PT_TABLE;
-        if (put(s, level, va, descriptor)) return -1;
+        if (level == 3) {
+            descriptor |= PT_TABLE;
+            uint64_t l3_base = va & ~((1ULL << 21) - 1);
+            if (cached_l3_table && cached_l3_base == l3_base) {
+                if (s->write(s->ctx, cached_l3_table + 8UL * mmu_index(G, 3, va), descriptor))
+                    return -1;
+            } else {
+                if (descend(s, 3, va, &cached_l3_table)) return -1;
+                cached_l3_base = l3_base;
+                if (s->write(s->ctx, cached_l3_table + 8UL * mmu_index(G, 3, va), descriptor))
+                    return -1;
+            }
+        } else {
+            /* Invalidate L3 cache when inserting level 1 or 2 block */
+            cached_l3_base = UINT64_MAX;
+            cached_l3_table = 0;
+            if (put(s, level, va, descriptor)) return -1;
+        }
 
         va += step;
         pa += step;
@@ -105,7 +132,7 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
 int shadow_insert(struct shadow *s, const struct mmu_leaf *leaf,
                   uint64_t clip_start, uint64_t clip_end)
 {
-    if (!leaf->valid) return SHADOW_NOTHING;
+    if (!s || !leaf || !leaf->valid) return SHADOW_NOTHING;
 
     uint64_t start = leaf->base, end = leaf->base + leaf->size;
     if (start < clip_start) start = clip_start;
