@@ -234,14 +234,16 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'ccf0c8f4da4f63fbe25c
 # --edp-backlight (opt-in, agents/brightness): the --present-latch collection with an AdrenoX2 that carries
 # -DADRENO_BACKLIGHT=1 in AdrenoDisplay.o (the AdrenoBacklight service CoreBrightness drives). Pinned: next-20261024,
 # the org next build (KEXT_PROFILE=desktop-next I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh, umbrella
-# 78920c5, SnapAdreno b5bfcb4, SnapI2CHID f0b7984): AdrenoX2 3202fd6f = desktop-nocoherent (no --gpu-coherent) plus
-# AdrenoBacklight, the head rule (adreno_head_offset), the IOMFB call trace and the CS sampler opt-in
-# (adreno_cs_samplers); SnapI2CHID 4a81f74e = desktop plus the Fn-key layer (snap_i2c_fnkeys). Every addition stays off
-# without its boot-arg except the head rule (adreno_head_offset=0 turns it off). A --gpu-coherent run wants a
-# KEXT_PROFILE=desktop-backlight collection here instead. Without --edp-backlight the latch collection above
-# (org-desktop-nocoherent-20261023, ccf0c8f4) is used, which is also this one's rollback.
-INPUT_AUXKC_DESKTOP_BACKLIGHT = 'build/current-assets/next-20261024/adreno-input.kc'
-INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = '57965a84916986eed68988b174d699eba06050207945af742c6dd57f616cbd82'
+# fbed1ca, SnapAdreno 9cc1e92, SnapI2CHID f0b7984): AdrenoX2 d88a2620 = desktop-nocoherent (no --gpu-coherent) plus
+# AdrenoBacklight (publishing force-brightness-control so BrightnessControl writes brightness-nits; nits mapped
+# proportionally onto levels 41..2047), the head rule (adreno_head_offset), the IOMFB call trace and the CS sampler
+# opt-in (adreno_cs_samplers); SnapI2CHID 4a7bbcbf = desktop plus the Fn-key layer (snap_i2c_fnkeys), code sections
+# identical to next-20261024's 4a81f74e. Every addition stays off without its boot-arg except the head rule
+# (adreno_head_offset=0 turns it off). A --gpu-coherent run wants a KEXT_PROFILE=desktop-backlight collection here
+# instead. The previous collection, next-20261024 (57965a84), is this one's rollback; without --edp-backlight the latch
+# collection above (org-desktop-nocoherent-20261023, ccf0c8f4) is used.
+INPUT_AUXKC_DESKTOP_BACKLIGHT = 'build/current-assets/next2-20261024/adreno-input.kc'
+INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = 'cc07dfd3540817b91d1baefd7213438d06637c716ff306f3cbef438a7df36a64'
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
