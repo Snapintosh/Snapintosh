@@ -31,7 +31,9 @@
  *  F10 the zero page is not at PoC before the first IB (R1); the package is not what the CP fetches.
  * Built with -DSNAP_ADRENO_IB_ASYNC=1 every IB goes through the kext's START/POLL loop (compat/adreno-ib-async.h)
  * and a CP that takes model time, so the list keeps its preparation across the POLLs (agents/async-ib
- * FAILURE-MODES.md A17); SNAP_IB_PATH=sync runs the same suite through that build's synchronous ADRENO_GUEST_IB. */
+ * FAILURE-MODES.md A17); SNAP_IB_PATH=sync runs the same suite through that build's synchronous ADRENO_GUEST_IB.
+ * Built with -DADRENO_IB_CS_SAMPLERS=1 the CS sampler checks also cover the count a kext opts into; adding
+ * -DIB_REPLAY_CS_SAMPLER_UNITS=N makes --replay validate as a kext booted with adreno_cs_samplers=1 (N = 8). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -600,6 +602,53 @@ static void test_ib_draw(void)
     CHECK(adreno_resource_list_release(&ib_list, &ibfx_ops) == 0);
     CHECK(ibfx[0].retained == 0 && ibfx[1].retained == 0 && ibfx[0].prepared == 0);
 }
+/* One CS sampler load (CP_LOAD_STATE6_FRAG SB6_CS_TEX ST6_SHADER, indirect) of `units` S#s from a package table of
+ * `table` zero S#s, DST_OFF `dst`, through the whole kext path: the submission's result. */
+static int ib_cs_sampler_load(uint32_t units, uint32_t table, uint32_t dst)
+{
+    ib_setup();
+    ib_standard_fixtures();
+    struct ib_pkg k;
+    memset(&k, 0, sizeof k);
+    pk_pkt7(&k, A8XX_E_CP_SET_MARKER, 1); pk_word(&k, A8XX_PKT_A8XX_CP_SET_MARKER_0__MODE(A8XX_E_RM6_COMPUTE));
+    pk_pkt7(&k, A8XX_E_CP_LOAD_STATE6_FRAG, 3);
+    pk_word(&k, A8XX_PKT_CP_LOAD_STATE6_0__DST_OFF(dst) | A8XX_PKT_CP_LOAD_STATE6_0__STATE_TYPE(A8XX_E_ST6_SHADER) |
+                A8XX_PKT_CP_LOAD_STATE6_0__STATE_SRC(A8XX_E_SS6_INDIRECT) |
+                A8XX_PKT_CP_LOAD_STATE6_0__STATE_BLOCK(A8XX_E_SB6_CS_TEX) | A8XX_PKT_CP_LOAD_STATE6_0__NUM_UNIT(units));
+    pk_word(&k, 0); pk_word(&k, 0);
+    const uint32_t ext = k.n - 2;
+    pk_pkt7(&k, A8XX_E_CP_EVENT_WRITE7, 1); pk_word(&k, A8XX_PKT_CP_EVENT_WRITE7_0__EVENT(A8XX_E_CACHE_CLEAN));
+    k.data_bytes = 192;                                                              /* room for 12 S#s, zero */
+    pk_reloc(&k, ext, ext + 1, ADRENO_IB_RELOC_PACKAGE, ADRENO_IB_ACCESS_READ, 4, 32, 0, pk_data_at(&k), 16ull * table);
+    size_t n = pk_serialize(&k, ib_command_bytes);
+    CHECK(ib_standard_list(&ib_list, ib_entries) == 0);
+    int result = ib_command(&ib_list, ib_command_bytes, n);
+    CHECK(adreno_resource_list_release(&ib_list, &ibfx_ops) == 0);
+    return result;
+}
+/* CS sampler loads: one S# unit, the limit the validator has always had; with ADRENO_IB_CS_SAMPLERS, up to the count
+ * the kext opts into (the boot-arg adreno_cs_samplers=1: ADRENO_IB_CS_SAMPLER_UNITS_MAX), still bounded by the table's
+ * relocation and refused with a DST_OFF, and back to one unit for a count outside 1..MAX. */
+static void test_ib_cs_samplers(void)
+{
+    CHECK(ib_cs_sampler_load(1, 1, 0) == 0);
+    CHECK(ib_cs_sampler_load(2, 2, 0) == ADRENO_IB_E_PACKET);
+    CHECK(ib_cs_sampler_load(1, 1, 1) == ADRENO_IB_E_PACKET);
+#if ADRENO_IB_CS_SAMPLERS
+    adreno_ib_set_cs_sampler_units(ADRENO_IB_CS_SAMPLER_UNITS_MAX);
+    CHECK(ib_cs_sampler_load(1, 1, 0) == 0);
+    CHECK(ib_cs_sampler_load(2, 2, 0) == 0);
+    CHECK(ib_cs_sampler_load(ADRENO_IB_CS_SAMPLER_UNITS_MAX, ADRENO_IB_CS_SAMPLER_UNITS_MAX, 0) == 0);
+    CHECK(ib_cs_sampler_load(ADRENO_IB_CS_SAMPLER_UNITS_MAX + 1, ADRENO_IB_CS_SAMPLER_UNITS_MAX + 1, 0) == ADRENO_IB_E_PACKET);
+    CHECK(ib_cs_sampler_load(3, 2, 0) == ADRENO_IB_E_BOUNDS);           /* more S#s than the relocated table holds */
+    CHECK(ib_cs_sampler_load(2, 2, 1) == ADRENO_IB_E_PACKET);
+    adreno_ib_set_cs_sampler_units(0);
+    CHECK(ib_cs_sampler_load(2, 2, 0) == ADRENO_IB_E_PACKET);
+    adreno_ib_set_cs_sampler_units(ADRENO_IB_CS_SAMPLER_UNITS_MAX + 1);
+    CHECK(ib_cs_sampler_load(2, 2, 0) == ADRENO_IB_E_PACKET);
+    adreno_ib_set_cs_sampler_units(1);
+#endif
+}
 /* F6: every reply the monitor can give, through the whole kext path (fake monitor replies). */
 static void test_ib_replies(void)
 {
@@ -949,6 +998,9 @@ int main(int argc, char **argv)
         dram = calloc(1, RAM_SIZE); cache = calloc(1, RAM_SIZE);
         ib_arena = aligned_alloc(0x4000, ADRENO_IB_ARENA_BYTES);
         if (!dram || !cache || !ib_arena || adreno_ib_tables_init(&ib_tables)) return 2;
+#if ADRENO_IB_CS_SAMPLERS && defined(IB_REPLAY_CS_SAMPLER_UNITS)
+        adreno_ib_set_cs_sampler_units(IB_REPLAY_CS_SAMPLER_UNITS);   /* as a kext booted with adreno_cs_samplers=1 */
+#endif
         return replay(argv[2]);
     }
     if (argc != 1) return 64;
@@ -958,7 +1010,8 @@ int main(int argc, char **argv)
     ib_arena = aligned_alloc(0x4000, ADRENO_IB_ARENA_BYTES);
     if (!dram || !cache || !ib_arena) return 2;
     CHECK(adreno_ib_tables_init(&ib_tables) == 0);
-    test_ib_tables(); test_ib_probe(); test_ib_draw(); test_ib_replies(); test_ib_fail_fast(); test_fence_ring_wrap();
+    test_ib_tables(); test_ib_probe(); test_ib_draw(); test_ib_cs_samplers(); test_ib_replies(); test_ib_fail_fast();
+    test_fence_ring_wrap();
 #if MONITOR_IB
     test_ib_monitor_states();
 #endif

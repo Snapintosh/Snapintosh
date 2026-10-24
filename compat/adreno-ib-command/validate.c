@@ -60,6 +60,18 @@ static int check_textures(struct adreno_ib_work *w, int32_t i, uint64_t count, u
  * live image BASE is RESOURCE/WRITE. */
 #define ADRENO_IB_CS_STORAGE_MAX 8u
 #define ADRENO_IB_CS_TEXTURE_MAX 8u
+#if ADRENO_IB_CS_SAMPLERS
+_Static_assert(ADRENO_IB_CS_SAMPLER_UNITS_MAX <= ADRENO_IB_CS_TEXTURE_MAX,
+               "a CS sampler table is never larger than the T# table it samples");
+static uint32_t cs_sampler_units = 1u;
+void adreno_ib_set_cs_sampler_units(uint32_t units)
+{
+    cs_sampler_units = units && units <= ADRENO_IB_CS_SAMPLER_UNITS_MAX ? units : 1u;
+}
+#define ADRENO_IB_CS_SAMPLER_UNITS cs_sampler_units
+#else
+#define ADRENO_IB_CS_SAMPLER_UNITS 1u
+#endif
 static int check_storage_images(struct adreno_ib_work *w, int32_t i, uint64_t count, uint32_t at)
 {
     const struct adreno_ib_reloc *table = &w->relocs[i];
@@ -233,10 +245,11 @@ static int load_state(struct adreno_ib_work *w, uint32_t op, uint32_t at, uint32
                              (type == A8XX_E_ST6_SHADER || type == A8XX_E_ST6_CONSTANTS);
     if (src == A8XX_E_SS6_INDIRECT && op == A8XX_E_CP_LOAD_STATE6_FRAG && (texture_load || cs_uav)) {
         if (count != 3) return fail(w, ADRENO_IB_E_PACKET, at - 4);
-        /* CS samplers: one unit. CS T#s: 1..ADRENO_IB_CS_TEXTURE_MAX units (CoreImage's T#1 with a null T#0), each
+        /* CS samplers: one unit (ADRENO_IB_CS_SAMPLERS: up to adreno_ib_set_cs_sampler_units' count, bounded by the
+         * relocation below). CS T#s: 1..ADRENO_IB_CS_TEXTURE_MAX units (CoreImage's T#1 with a null T#0), each
          * checked by check_textures below. */
         if (block == A8XX_E_SB6_CS_TEX &&
-            (!units || units > (type == A8XX_E_ST6_CONSTANTS ? ADRENO_IB_CS_TEXTURE_MAX : 1u) ||
+            (!units || units > (type == A8XX_E_ST6_CONSTANTS ? ADRENO_IB_CS_TEXTURE_MAX : ADRENO_IB_CS_SAMPLER_UNITS) ||
              (w0 & A8XX_PKT_CP_LOAD_STATE6_0__DST_OFF__MASK)))
             return fail(w, ADRENO_IB_E_PACKET, at);
         const struct field ext = {A8XX_PKT_CP_LOAD_STATE6_1__EXT_SRC_ADDR__MASK, 0, 0xffffffffu, ADRENO_IB_HI_BITS_REG64,

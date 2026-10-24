@@ -123,6 +123,15 @@ int adreno_ib_relocate(struct adreno_ib_work *,
  * UBO/S#/T#/UAV loads, consistent local/global/group geometry, and resource-WRITE linear 2D RGBA32Float
  * storage descriptors with a checked row extent. See docs/ADRENO-COMPUTE-PACKETS-20261019.md. */
 int adreno_ib_validate(struct adreno_ib_work *);
+#if ADRENO_IB_CS_SAMPLERS
+/* The S# units one CS sampler load (CP_LOAD_STATE6_FRAG, SB6_CS_TEX, ST6_SHADER) may carry in the IBs validated after
+ * the call: 1 (the fixed limit without ADRENO_IB_CS_SAMPLERS, and the default) up to ADRENO_IB_CS_SAMPLER_UNITS_MAX;
+ * any other value sets 1. CoreImage's multi-input kernels sample T#1..N with samplers 0..N-1. An S# holds no address,
+ * and the load stays bounded by its package relocation (NUM_UNIT * 16 bytes), as an FS sampler load is. Process-wide;
+ * the kext sets it once, before it publishes ADRENO_IB_REGISTRY_PROPERTY, so no validation runs concurrently. */
+#define ADRENO_IB_CS_SAMPLER_UNITS_MAX 8u
+void adreno_ib_set_cs_sampler_units(uint32_t units);
+#endif
 /* The RESOURCE relocation range rule (design 3.2; AdrenoMemoryMap::resolveRange calls it under the map lock):
  * a reserved, pinned, fully mapped window resource and [offset, offset + bytes) inside its logical length, with
  * no FILL32-style size or dword limits. 0 and *address = resource VA + offset, or ADRENO_RESOURCE_E_*. */
