@@ -17,6 +17,12 @@
 #     ZERO_AR_DATE  exported as 1 unless set: object times in the kexts' debug maps are zeroed, so two builds in the
 #                   same checkout produce the same kext bytes
 #
+# The collection's bytes are not reproducible even from identical kexts: its prelink info records each kext's
+# _PrelinkBundlePath in build-auxkc-user.py's temporary staging folder, whose name is random. Against a deployed
+# collection, expect differences only there and in what the kexts' UUIDs determine (each kext's LC_UUID and
+# OSBundleUUID, the collection's UUID and _PrelinkKCID, the receipt's per-kext digests); compare the kexts with
+# REFERENCE for the substance.
+#
 # Local inputs, never committed: gpu/adreno-kext/kext/include/*26A428.h (AGENTS.md, "Rebuilding What Is Not
 # Distributed"), downloads/extracted/j700ap (the J700 restore-image kernelcache), the KDK at
 # /Library/Developer/KDKs/KDK_27.0_26A428.kdk, and GNU tar at /opt/homebrew/bin/gtar (build-auxkc-user.py runs it
