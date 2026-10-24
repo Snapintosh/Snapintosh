@@ -21,7 +21,7 @@
    (kernel, IOMobileGraphicsFamily, IOAVFamily, IOSurface, IOGPUFamily).
 
 Writes <out>/iomfb-vtable-check.json (the full per-slot table) and exits 1 on any failure.
-Usage: tools/check-iomfb-vtable.py [--out DIR] [--kc PATH] [--kdk PATH] [--no-display]
+Usage: tools/check-iomfb-vtable.py [--out DIR] [--kc PATH] [--kdk PATH] [--no-display] [--display-define NAME=V ...]
 """
 import argparse
 import hashlib
@@ -83,7 +83,7 @@ def sh(cmd, **kw):
     return r.stdout
 
 
-def compile_bundle(out, sources):
+def compile_bundle(out, sources, extra=None):
     sdk = sh(['xcrun', '--show-sdk-path']).strip()
     kh = f'{sdk}/System/Library/Frameworks/Kernel.framework/Headers'
     common = ['-target', 'arm64e-apple-macos27.0', '-isysroot', sdk, '-mkernel', '-nostdinc',
@@ -95,6 +95,7 @@ def compile_bundle(out, sources):
     for src in sources:
         obj = out / (Path(src).stem + '.o')
         lang = cxx if str(src).endswith('.cpp') else common
+        lang = lang + list((extra or {}).get(str(src), ()))
         sh(['xcrun', 'clang++' if str(src).endswith('.cpp') else 'clang'] + lang + ['-c', str(src), '-o', str(obj)])
         objs.append(str(obj))
     binary = out / 'IOMFBCheck'
@@ -198,6 +199,9 @@ def main():
     ap.add_argument('--kdk', type=Path, default=gen.DEFAULT_KDK)
     ap.add_argument('--kc', type=Path, default=gen.DEFAULT_KC)
     ap.add_argument('--no-display', action='store_true', help='check only the stub subclass')
+    ap.add_argument('--display-define', action='append', default=[], metavar='NAME[=VALUE]',
+                    help='a -D for AdrenoDisplay.cpp only, repeatable (e.g. a profile\'s AdrenoDisplay set, or '
+                         'ADRENO_DISPLAY_TRACE_MODES=1, whose overrides add slots to check)')
     args = ap.parse_args()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -217,7 +221,8 @@ def main():
     if not args.no_display:
         sources.insert(1, KEXT / 'src/AdrenoDisplay.cpp')
         classes.append('AdrenoDisplay')
-    binary_path = compile_bundle(out, sources)
+    binary_path = compile_bundle(out, sources, {str(KEXT / 'src/AdrenoDisplay.cpp'):
+                                                ['-D' + d for d in args.display_define]})
     binary = gen.MachOKext(binary_path)
 
     results = {}
