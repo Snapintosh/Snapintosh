@@ -137,7 +137,11 @@ def generate(tools, x290):
     S3.pipe_write(s, R.PIPE_BR, 'RB_GC_GMEM_PROTECT', gmem_protect)
     S3.aperture_clear(s)
     secvid = list(s.ops)
-    sources = [tools / 'a16gpu_stage3.py', tools / 'adreno_x2.py'] + ([tools / 'a16gpu_x290.py'] if x290 else [])
+    # adreno_x2.py loads X285_NONCTXT (hw_init's non-context writes, among them RB_GC_GMEM_PROTECT) from
+    # adreno_x2_protect.py since q1n1 split its GPL-2.0-only tables out; a q1n1 from before the split has none.
+    protect = [tools / 'adreno_x2_protect.py'] if (tools / 'adreno_x2_protect.py').exists() else []
+    sources = [tools / 'a16gpu_stage3.py', tools / 'adreno_x2.py', *protect]
+    sources += [tools / 'a16gpu_x290.py'] if x290 else []
     inputs = ' '.join(f'{p.name}:{hashlib.sha256(p.read_bytes()).hexdigest()}' for p in sources)
     return hw, sqe, me_init, secvid, s.skipped, inputs
 

@@ -14,7 +14,7 @@
  */
 #pragma once
 #include <stdint.h>
-#define ADRENO_RECOVER_TABLE_INPUTS "a16gpu_stage3.py:47df054f6fd6d59b3c14be384f8ec79433bc83d3a26ecb0abaee39ca50bf2e50 adreno_x2.py:4f3cb92f67a81f693d17e298c70b3e55690c9ba48c3b9a379d8127a44f39094f"
+#define ADRENO_RECOVER_TABLE_INPUTS "a16gpu_stage3.py:0afd4df74509735e46003e5ac251fc2e42d41df57b5192d7abb2ff4258cd0041 adreno_x2.py:b3ee82f1f1dfcda4f2efafc4cd3facfd4c56b0e0275295142a93a5d8976d0caf adreno_x2_protect.py:d35d3cdf24340fd18fc7c6f1806664cd13726ec6795626f27b15ce93aa9d3cfb"
 #define ADRENO_RECOVER_TABLE_CP_FENCE_OPTIONS ""
 #define ADRENO_RECOVER_TABLE_PROTECT_GLOBAL 52u
 #define ADRENO_RT_WRITE 0u
