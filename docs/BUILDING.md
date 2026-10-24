@@ -158,6 +158,17 @@ host test harness (`regtest`). Optional environment variables:
 
 - `ADRENO_LENIENT=1` drops a pass the encoder refuses instead of failing the
   command buffer. Use it for deployment; the tests use the strict default.
+- `ADRENO_PIPELINE=1` builds for the desktop AdrenoX2's IB pipeline (IOSurface
+  shadows wait for the GPU). The deployed plug-ins use it with `ADRENO_LENIENT=1`.
+- `ADRENO_SETTINGS_ICONS=1` encodes the CoreImage kernels of the icons inside
+  System Settings panes: sampled sRGB and grey+alpha textures, and multi-input
+  kernels once AdrenoX2 publishes `AdrenoIBComputeSamplers` (its
+  `ADRENO_IB_CS_SAMPLERS`, opted in with the guest boot-arg
+  `adreno_cs_samplers=1`). `tools/test-adreno-settings-icons.py` and
+  `tools/test-adreno-settings-ci-encoding.py` test it.
+
+`ADRENO_PIPELINE` and `ADRENO_SETTINGS_ICONS` take 0 or 1; 0 or unset leaves the
+build byte for byte as without them.
 - `ADRENO_SHADER_CACHE_PACK=<file>` links a precompiled shader pack into the
   bundle.
 - `ADRENO_COMPILER_RUNTIME=<dir>` bundles the air2ir3 runtime

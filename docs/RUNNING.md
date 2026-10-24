@@ -200,6 +200,21 @@ python3 tools/deploy-guest-plugin.py --device udp://<interface> \
 The tool checks every file against its expected base before writing anything,
 keeps backups, and can put them back with `--restore`.
 
+A plug-in that changes how icons render has no visible effect until the icons
+already rendered are dropped: IconServices keeps them in
+`/Library/Caches/com.apple.iconservices.store` and in each user's cache folder
+(`com.apple.iconservices`, `com.apple.iconservicesagent`), and the Dock keeps its
+own `com.apple.dock.iconcache` there. Rename them aside from the single-user
+shell, after the install and before the boot continues: run the tool without
+`--continue-boot`, rename the caches with `tools/guest-console.py --run` under the
+same `--owner`, then run the tool again with `--continue-boot` (it finds the files
+installed and only continues the boot).
+
+The kext side of the icons inside System Settings panes, `ADRENO_IB_CS_SAMPLERS`
+in the desktop AdrenoX2 profiles, is off unless the guest boots with
+`adreno_cs_samplers=1`. `tools/cycle.py` has no option that adds that boot-arg
+yet.
+
 ## Exit codes
 
 A boot reports why the guest stopped:
