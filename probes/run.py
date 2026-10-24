@@ -126,6 +126,15 @@ MULTI = {'pauth-address': ['probes/pauth-address.S','compat/pauth-native.S'],
                      'compat/sep-bootstrap.c', 'compat/sep-pnon.c', 'compat/sep-xars.c',
                      'compat/sep-sks.c', 'compat/sep-sks-endpoint.c', '../q1n1/platform/uefi/sha256.c',
                      'compat/adreno.c', 'compat/adreno-fill.c', 'compat/adreno-ib.c', 'compat/irq-forward.c', 'compat/ans.c', 'compat/ans-window.c', 'compat/nvme-host.c', 'compat/early-stop.c', 'compat/a16-thermal.c', 'probes/memory.S']}
+# Units linked only when their opt-in define is in FLAGS, after MULTI's, so a build without the define links exactly
+# the objects it always did and its ELF stays byte-identical.
+OPTIONAL = {'xnuboot': (('-DSNAP_ADRENO_COHERENT=1', 'compat/adreno-coherent.c'),)}
+
+
+def optional_sources(name, flags):
+    return [rel for define, rel in OPTIONAL.get(name, ()) if define in flags]
+
+
 FLAGS = ['--target=aarch64-unknown-none-elf', '-ffreestanding', '-fno-pic',
          '-mgeneral-regs-only', '-O1', '-Wall', '-Wextra', '-Werror',
          '-fno-stack-protector', '-mcmodel=tiny']
@@ -145,7 +154,7 @@ def build(name, out_dir):
         return blob
     if name in MULTI:
         objs = []
-        for rel in MULTI[name]:
+        for rel in MULTI[name] + optional_sources(name, FLAGS):
             src = ROOT / rel
             obj = out_dir / (src.stem + '-' + src.suffix.lstrip('.') + '.o')
             subprocess.run([str(LLVM / 'clang'), *FLAGS, f'-I{ROOT / "shadow"}',
@@ -264,7 +273,8 @@ EVENTS = {1: 'monitor call', 2: 'stage-2 fault', 3: 'XNU took an exception',
           54: 'shared-region group records exhausted',
           55: 'stage-2 fault retried',
           57: 'QCC2072 command register written for the guest',
-          58: 'Adreno GPU recovery (SNAP_ADRENO_RECOVER)'}
+          58: 'Adreno GPU recovery (SNAP_ADRENO_RECOVER)',
+          59: 'Adreno IO-coherency self-test (SNAP_ADRENO_COHERENT)'}
 
 SPRR_FAILURES = {2:'invalid SPRR register state',
                  3:'permission change needs a shadow transaction',
@@ -373,6 +383,36 @@ def s2_owner_words(ipa, inventory):
         return ''
     who, base, size = best
     return f'; inside the guest tree\'s {who} window +{ipa - base:#x} of {size:#x}, which no virtual model answers'
+
+
+COHERENT_STATES = {0: 'NOT_RUN', 1: 'ON', 2: 'FAILED', 3: 'TIMEOUT', 4: 'REFUSED', 5: 'INCONCLUSIVE',
+                   6: 'GPU_ERROR'}   # compat/adreno-guest.h ADRENO_COHERENT_STATE_*
+COHERENT_PHASES = {1: 'CPU->GPU control', 2: 'GPU->CPU control', 3: 'CPU->GPU', 4: 'GPU->CPU',
+                   5: 'DC IVAC probe (retired)'}   # compat/adreno-coherent.h ADRENO_COHERENT_PHASE_*
+
+
+def coherent_event_lines(pc, a, b, c):
+    """EV_GPU_COHERENT (59) in words: probes/xnuboot.c records pc = the CPU->GPU control's PMU passes, a = state << 32
+    | detail, b = passed | the GPU->CPU control's PMU passes << 16, c = the controls' stale words. A forced ON (a
+    debug monitor, SNAP_ADRENO_COHERENT_FORCE) is said first and loudly: nothing was proven."""
+    state, detail = a >> 32, a & 0xffff
+    lines = []
+    if detail & 0x2000:
+        lines.append('*** FORCED ON WITHOUT THE SELF-TEST (SNAP_ADRENO_COHERENT_FORCE, debug only): GPU write-back '
+                     'maintenance skipped UNPROVEN ***')
+    phase = (detail >> 8) & 0x1f
+    where = '' if state in (1, 4) or not phase else (
+        f', at {COHERENT_PHASES.get(phase, f"phase {phase}")}'
+        + (f' round {(detail >> 4) & 15} case {detail & 15}' if phase in (3, 4) else ''))
+    today = [d for bit, d in ((0x8000, 'CPU->GPU'), (0x4000, 'GPU->CPU')) if detail & bit]
+    lines.append(f'state {COHERENT_STATES.get(state, state)} detail {detail:#x}{where}, {b & 0xffff} coherent '
+                 f'iterations passed' + (f"; today's leaves already coherent {' and '.join(today)}" if today else '')
+                 + (f' (REFUSED precondition {detail})' if state == 4 else ''))
+    if state != 4 and not detail & 0x2000:
+        for name, stale, pmu in (('CPU->GPU', c >> 32, pc), ('GPU->CPU', c & 0xffffffff, b >> 16)):
+            lines.append(f'{name} control: {stale} stale words; PMU refills: witness miss {pmu & 0xffff}, '
+                         f'resident {(pmu >> 16) & 0xffff}, witness after {(pmu >> 32) & 0xffff}')
+    return lines
 
 
 def mmio_stop_words(a, esr):
@@ -2381,6 +2421,10 @@ def run_xnuboot(proxy, info, code, guest_profile='j700ap-26A428',
             print(f'  {n:>2} {"fine-grained traps":<22} vCPU {c & 0xff}  '
                   f'{state.get(c >> 8, f"status {c >> 8}")}')
             print(f'     HFGRTR_EL2 {a:#018x}  HFGWTR_EL2 {b:#018x}')
+        elif kind == 59:
+            print(f'  {n:>2} {label:<22} pc {pc:#x}  {a:#x} {b:#x} {c:#x}')
+            for line in coherent_event_lines(pc, a, b, c):
+                print(f'     {line}')
         else:
             print(f'  {n:>2} {label:<22} pc {pc:#x}  {a:#x} {b:#x} {c:#x}')
 

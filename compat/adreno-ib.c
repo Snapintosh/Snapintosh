@@ -53,6 +53,11 @@ static uint64_t ib_now(const struct adreno_ops *o)
 
 #define L3_SLOT(p, va) ((p)->pool_pa + ADRENO_L3_OFFSET + (((va) - ADRENO_WINDOW_BASE) >> 12) * 8)
 
+#if SNAP_ADRENO_COHERENT
+/* compat/adreno-coherent.c is a second caller: one out-of-line copy keeps the monitor inside its 448 KiB of code
+ * (probes/run.py OUT_AT). */
+__attribute__((noinline))
+#endif
 unsigned adreno_ib_ring_words(uint32_t w[ADRENO_IB_RING_WORDS], uint64_t ib_va, uint32_t dwords,
                               uint64_t br_va, uint64_t bv_va, uint32_t marker)
 {
@@ -124,7 +129,7 @@ static int ib_ring(const struct adreno_ops *o, const struct adreno_params *p, st
             pa < mem_low || pa >= mem_high || mem_high - pa < 0x4000 ||
             (pa < p->arena_base + p->arena_size && p->arena_base < pa + 0x4000)) return e;
         for (uint64_t sub = at & ~0xfffUL; sub < at + chunk; sub += 0x1000)
-            if (RD64(o, L3_SLOT(p, sub)) != ((pa + (sub & 0x3fff)) | ADRENO_PTE_LEAF | ADRENO_PTE_RDONLY))
+            if (RD64(o, L3_SLOT(p, sub)) != ((pa + (sub & 0x3fff)) | ADRENO_LEAF(o) | ADRENO_PTE_RDONLY))
                 return e;
         at += chunk;
     }
@@ -138,6 +143,9 @@ static int ib_ring(const struct adreno_ops *o, const struct adreno_params *p, st
     uint64_t ttbr = RD(o, ADRENO_CB0 + ADRENO_CB_TTBR0) | (uint64_t)RD(o, ADRENO_CB0 + ADRENO_CB_TTBR0 + 4) << 32;
     if (ttbr != p->cb0_ttbr0 || RD(o, ADRENO_CB0 + ADRENO_CB_TCR) != p->cb0_tcr ||
         ((RD(o, ADRENO_CB0 + ADRENO_CB_SCTLR) ^ p->cb0_sctlr) & ~ADRENO_SCTLR_FIXED)) return e;
+#if SNAP_ADRENO_COHERENT
+    if (!ADRENO_CB0_MAIR_OK(o, RD(o, ADRENO_CB0 + ADRENO_CB_MAIR0))) return e;
+#endif
     e = ADRENO_E_FAULT;
     if ((RD(o, ADRENO_CB0 + ADRENO_CB_FSR) & ADRENO_CB_FSR_FAULT) || RD(o, ADRENO_SMMU_SGFSR)) return e;
     e = ADRENO_E_SQE;
@@ -833,7 +841,7 @@ int adreno_guest_ib(const struct adreno_ops *o, const struct adreno_params *p, s
             pa < mem_low || pa >= mem_high || mem_high - pa < 0x4000 ||
             (pa < p->arena_base + p->arena_size && p->arena_base < pa + 0x4000)) goto out;
         for (uint64_t sub = at & ~0xfffUL; sub < at + chunk; sub += 0x1000)
-            if (RD64(o, L3_SLOT(p, sub)) != ((pa + (sub & 0x3fff)) | ADRENO_PTE_LEAF | ADRENO_PTE_RDONLY))
+            if (RD64(o, L3_SLOT(p, sub)) != ((pa + (sub & 0x3fff)) | ADRENO_LEAF(o) | ADRENO_PTE_RDONLY))
                 goto out;
         at += chunk;
     }
@@ -848,6 +856,9 @@ int adreno_guest_ib(const struct adreno_ops *o, const struct adreno_params *p, s
     uint64_t ttbr = RD(o, ADRENO_CB0 + ADRENO_CB_TTBR0) | (uint64_t)RD(o, ADRENO_CB0 + ADRENO_CB_TTBR0 + 4) << 32;
     if (ttbr != p->cb0_ttbr0 || RD(o, ADRENO_CB0 + ADRENO_CB_TCR) != p->cb0_tcr ||
         ((RD(o, ADRENO_CB0 + ADRENO_CB_SCTLR) ^ p->cb0_sctlr) & ~ADRENO_SCTLR_FIXED)) goto out;
+#if SNAP_ADRENO_COHERENT
+    if (!ADRENO_CB0_MAIR_OK(o, RD(o, ADRENO_CB0 + ADRENO_CB_MAIR0))) goto out;
+#endif
     e = ADRENO_E_FAULT;
     if ((RD(o, ADRENO_CB0 + ADRENO_CB_FSR) & ADRENO_CB_FSR_FAULT) || RD(o, ADRENO_SMMU_SGFSR)) goto out;
     e = ADRENO_E_SQE;

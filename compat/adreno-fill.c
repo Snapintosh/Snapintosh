@@ -85,7 +85,7 @@ int adreno_guest_fill32(const struct adreno_ops *ops, const struct adreno_params
             (pa < p->arena_base + p->arena_size && p->arena_base < pa + 0x4000)) goto out;
         for (uint64_t sub = at & ~0xfffUL; sub < at + bytes; sub += 0x1000) {
             uint64_t slot = p->pool_pa + ADRENO_L3_OFFSET + ((sub - ADRENO_WINDOW_BASE) >> 12) * 8;
-            if (READ64(ops, slot) != ((pa + (sub & 0x3fff)) | ADRENO_PTE_LEAF)) goto out;
+            if (READ64(ops, slot) != ((pa + (sub & 0x3fff)) | ADRENO_LEAF(ops))) goto out;
         }
         at += bytes;
     }

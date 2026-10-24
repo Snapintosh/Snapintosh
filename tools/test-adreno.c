@@ -265,7 +265,12 @@ static int m_smc(void *ctx, uint64_t *x)
     x[0] = tz.final; x[1] = 0x11; x[2] = 0x22; x[3] = 0x33;
     return 0;
 }
-static const struct adreno_ops ops = {0, m_rd, m_wr, m_rd64, m_wr64, m_clean, m_now, m_smc, 1000000, 0};
+static const struct adreno_ops ops = {0, m_rd, m_wr, m_rd64, m_wr64, m_clean, m_now, m_smc, 1000000, 0
+#if SNAP_ADRENO_COHERENT
+                                     , 0   /* today's leaves until a coherency self-test passes */
+                                     , 0   /* no PMU (tools/test-adreno-coherent.c models one) */
+#endif
+};
 
 /* --- q1n1's state after cp-fence, as `adopt` records it -------------------- */
 #define ROOT (ARENA + 0x80000)

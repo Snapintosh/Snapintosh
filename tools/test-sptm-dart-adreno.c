@@ -136,7 +136,12 @@ static void o_wr64(void *c, uint64_t pa, uint64_t v) { (void)c; memcpy(arena + (
 static void o_clean(void *c, uint64_t pa, uint64_t n) { (void)c; (void)pa; (void)n; }
 static uint64_t t;
 static uint64_t o_now(void *c) { (void)c; return t += 10; }
-static const struct adreno_ops ops = {0, o_rd, o_wr, o_rd64, o_wr64, o_clean, o_now, 0, 1000000, 0};
+static const struct adreno_ops ops = {0, o_rd, o_wr, o_rd64, o_wr64, o_clean, o_now, 0, 1000000, 0
+#if SNAP_ADRENO_COHERENT
+                                     , 0   /* today's leaves (SNAP_ADRENO_COHERENT) */
+                                     , 0   /* no PMU */
+#endif
+};
 struct leaf_ctx { const struct sptm_memory *m; };
 static uint64_t leaf(void *ctx, uint64_t iova)
 {

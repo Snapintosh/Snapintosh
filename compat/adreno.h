@@ -128,6 +128,35 @@ enum {
 #define ADRENO_PTE_ADDR   0x0000fffffffff000UL
 #define ADRENO_PTE_LEAF   (3UL | (1UL << 6) | (2UL << 8) | (1UL << 10) | (1UL << 11))
 #define ADRENO_PTE_RDONLY (1UL << 7)
+#ifndef SNAP_ADRENO_COHERENT
+#define SNAP_ADRENO_COHERENT 0
+#endif
+#ifndef SNAP_ADRENO_COHERENT_FORCE
+#define SNAP_ADRENO_COHERENT_FORCE 0   /* debug: ON without the self-test (compat/adreno-coherent.h) */
+#endif
+#if SNAP_ADRENO_COHERENT_FORCE && !SNAP_ADRENO_COHERENT
+#error "SNAP_ADRENO_COHERENT_FORCE forces SNAP_ADRENO_COHERENT's state: build with both"
+#endif
+#if SNAP_ADRENO_COHERENT
+/* IO-coherent leaves: the leaf Linux uses for a cached-coherent buffer on glymur (io-pgtable-arm.c IOMMU_CACHE:
+ * AttrIndx 1 and SH inner shareable), with ADRENO_PTE_LEAF's permission, AF and nG bits. AttrIndx 1 is MAIR 0xff
+ * only because q1n1 programs CB0 MAIR0 0xf404ff44 (tools/adreno_x2.py CB_MAIR0); the monitor re-reads it before
+ * using this word (compat/adreno-coherent.c) and before every IB (compat/adreno-ib.c). The word is chosen once, at
+ * prepare, while the mirror holds no guest leaf, and carried to every placement check in adreno_ops.leaf. */
+#define ADRENO_PTE_LEAF_COHERENT ((ADRENO_PTE_LEAF & ~(3UL << 8)) | (1UL << 2) | (3UL << 8))
+/* adreno_ops.leaf holds the bits that turn ADRENO_PTE_LEAF into the run's word: 0, or ADRENO_PTE_COHERENT_BITS
+ * (AttrIndx 0 -> 1, SH outer -> inner: both only add bits), so the check is one OR at every placement site. */
+#define ADRENO_PTE_COHERENT_BITS (ADRENO_PTE_LEAF_COHERENT ^ ADRENO_PTE_LEAF)
+_Static_assert((ADRENO_PTE_LEAF | ADRENO_PTE_COHERENT_BITS) == ADRENO_PTE_LEAF_COHERENT, "coherent bits only add");
+#define ADRENO_LEAF(o) (ADRENO_PTE_LEAF | (o)->leaf)
+#define ADRENO_CB_MAIR0     0x038                       /* arm-smmu.h ARM_SMMU_CB_S1_MAIR0 */
+#define ADRENO_SMMU_CBAR0   (ADRENO_SMMU_PA + 0x1000)   /* GR1 page, ARM_SMMU_GR1_CBAR(0) (q1n1 adreno_x2.py SMMU_CBAR) */
+/* A ring user's CB0 check: coherent leaves are only coherent while MAIR index 1 is still write-back. `mair` is a
+ * register read, evaluated only with coherent leaves, so today's leaves cost no extra MMIO. */
+#define ADRENO_CB0_MAIR_OK(o, mair) (!(o)->leaf || (((mair) >> 8) & 0xffu) == 0xffu)
+#else
+#define ADRENO_LEAF(o) ADRENO_PTE_LEAF
+#endif
 
 /* PM4 (adreno_pm4.xml): CP_MEM_WRITE, type-7 header with odd parity. */
 #define ADRENO_PKT7_MEM_WRITE3 0x703d8003U
@@ -220,6 +249,12 @@ struct adreno_ops {
     int (*smc)(void *ctx, uint64_t regs[8]);             /* nonzero: did not reach EL3 */
     uint64_t hz;
     void (*invalidate)(void *ctx, uint64_t pa, uint64_t size); /* aligned DC IVAC + DSB */
+#if SNAP_ADRENO_COHERENT
+    uint64_t leaf;   /* 0 or ADRENO_PTE_COHERENT_BITS: the run's mirror leaf is ADRENO_LEAF(o) */
+#if !ADRENO_DIRECT
+    uint64_t (*refills)(void *ctx);   /* the self-test's PMU counter (L2D_CACHE_REFILL); the monitor reads it itself */
+#endif
+#endif
 };
 
 /* Which block of the GPU aperture holds `pa` (ADRENO_NONE outside it). */
@@ -288,6 +323,13 @@ int adreno_guest_cache(const struct adreno_ops *o, const struct adreno_params *p
                        struct adreno_state *s, uint64_t regs[4],
                        uint64_t (*leaf)(void *ctx, uint64_t iova), void *leaf_ctx,
                        uint64_t mem_low, uint64_t mem_high);
+#if SNAP_ADRENO_COHERENT
+int adreno_guest_cache_filtered(const struct adreno_ops *o, const struct adreno_params *p,
+                                struct adreno_state *s, uint64_t regs[4],
+                                uint64_t (*leaf)(void *ctx, uint64_t iova), void *leaf_ctx,
+                                uint64_t mem_low, uint64_t mem_high,
+                                int (*writeback)(void *ctx, uint64_t pa), void *writeback_ctx);
+#endif
 
 /* Mirror DART stream 0 over [iova, iova + size): `leaf` returns the committed
  * T8110 level-2 descriptor of a 16 KiB IOVA page (0: none). Leaves that point

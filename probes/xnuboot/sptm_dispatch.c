@@ -313,7 +313,7 @@ static int monitor_call_impl(struct context *c, uint64_t *frame, uint64_t *elr)
         if ((endpoint==2 || endpoint==3) && (gp->gpu.flags & ADRENO_F_DART) &&
             frame[0]==SPTM_DART_ADRENO && !frame[1]) {
             struct gpu_leaf_ctx leaf={&memory,&c->model_state[index].dart};
-            struct adreno_ops o=gpu_ops(c);
+            struct adreno_ops o=GPU_LEAF_OPS(c);
             if (endpoint==2) c->gpu.maps++; else c->gpu.unmaps++;
             int e=adreno_mirror(&o,&gp->gpu,&c->gpu,frame[2],endpoint==2 ? frame[4] : frame[3],
                                 gpu_leaf,&leaf,gp->mem_low,gp->mem_high);

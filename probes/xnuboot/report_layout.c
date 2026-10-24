@@ -210,6 +210,13 @@ struct event {
                                   * (u32)epoch, b = RBBM_STATUS << 32 | RBBM_INT_0_STATUS, c = CP_INTERRUPT_STATUS_GLOBAL
                                   * << 32 | (u32)its own ticks (the snapshot before the reset); pc = the HVC, 0 the tick */
 #endif
+#if SNAP_ADRENO_COHERENT
+#define EV_GPU_COHERENT 59       /* compat/adreno-coherent.h self-test, once at prepare, whatever its outcome:
+                                  * pc = the CPU->GPU control's PMU passes (miss | resident << 16 | witness
+                                  * << 32), a = state << 32 | detail, b = iterations passed | the GPU->CPU
+                                  * control's PMU passes << 16, c = stale[0] << 32 | stale[1] (the controls'
+                                  * stale words, each at most 1,024); probes/run.py decodes it */
+#endif
 #define EV_HANDOFF   7        /* a field of the handoff was read: a = offset */
 #define EV_WATCHDOG  6        /* the guest ran too long and was taken back */
 #define EV_DISPATCH_CMD 8     /* a call that is not an endpoint call:

@@ -161,6 +161,34 @@
 #define ADRENO_RECOVER_E_DEAD (-96)
 #define ADRENO_IB_HARD_SECONDS_MAX 4u      /* IOGPU waitForGPUTimeoutSeconds is 5 (AdrenoContract.h) */
 
+/* ---- IO-coherent GPU mappings: ADRENO_GUEST_COHERENT (monitor SNAP_ADRENO_COHERENT) -----------------------------
+ * The monitor's boot self-test decides whether CB0's mirror leaves are cache-coherent with the CPU (AttrIndx 1 =
+ * MAIR 0xff, SH inner shareable). No ADT property: discovery is QUERY, which a monitor without it refuses (its fence
+ * handler: ADRENO_E_PARAMS), so an older monitor leaves the kext on today's maintenance.
+ *  QUERY   In: x1 = ADRENO_COHERENT_QUERY (x2, x3 ignored; pass 0).
+ *          Out: x0 = 0; x1 = ADRENO_COHERENT_ABI | state << 8 | (u16)detail << 16 (ADRENO_COHERENT_STATE_*);
+ *               x2 = the CPU attribute epoch (never 0): it moves whenever an SPTM call changes any frame's SH/AttrIndx,
+ *               so a "every frame of this map is CPU write-back" verdict holds only at the epoch it was made at;
+ *               x3 = self-test iterations passed.
+ * ADRENO_GUEST_CACHE with x3 = direction | ADRENO_CACHE_COHERENT, accepted only while the state is ON (else
+ * ADRENO_E_PARAMS before anything): the same arguments, validation and refusals as the plain call, then only the
+ * frames whose live CPU attribute is not Normal write-back are maintained. Out: x0 = 0, x1 = bytes, x2 = the bytes
+ * still maintained (0: every frame was write-back), x3 = WPTR. */
+#define ADRENO_GUEST_COHERENT 0x0001000B
+#define ADRENO_COHERENT_ABI 1u
+#define ADRENO_COHERENT_QUERY 0u
+#define ADRENO_COHERENT_STATE_NOT_RUN 0u      /* no self-test (no GPU, or prepare refused earlier) */
+#define ADRENO_COHERENT_STATE_ON 1u           /* passed every iteration: coherent leaves, coherent calls accepted */
+#define ADRENO_COHERENT_STATE_FAILED 2u       /* a direction saw stale data with coherent leaves */
+#define ADRENO_COHERENT_STATE_TIMEOUT 3u      /* a GPU job did not complete within its budget */
+#define ADRENO_COHERENT_STATE_REFUSED 4u      /* a precondition (CB0 MAIR/CBAR, scratch, ring, mirror) did not hold */
+#define ADRENO_COHERENT_STATE_INCONCLUSIVE 5u /* the test had no detection power (the PMU did not prove it) */
+#define ADRENO_COHERENT_STATE_GPU_ERROR 6u    /* a job retired with an error bit or a CB0/SMMU fault */
+#define ADRENO_CACHE_COHERENT 0x100u          /* ADRENO_GUEST_CACHE direction flag */
+/* In QUERY's detail with state ON: a debug monitor (SNAP_ADRENO_COHERENT_FORCE) set ON without the self-test. The
+ * kext takes it as ON only with its own boot-arg adreno_coherent_force=1, and says so loudly either way. */
+#define ADRENO_COHERENT_DETAIL_FORCED 0x2000u
+
 /* ---- Ring wrap (design S1; shared by FENCE, FILL32 and IB) ----------------------------------------------
  * The ring is ADRENO_RING_DWORDS(CP_RB_CNTL.BUFSZ) dwords (q1n1 writes BUFSZ ADRENO_RING_BUFSZ = 8192 dwords);
  * the monitor adopts it only when p->ring_dwords matches. Submissions stay synchronous: an emit starts with

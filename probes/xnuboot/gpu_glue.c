@@ -24,6 +24,20 @@ static struct adreno_ops gpu_ops(struct context *c)
     /* adreno.c reaches registers, DRAM, caches and the counter itself here. */
     return (struct adreno_ops){.ctx=c,.smc=gpu_smc,.hz=c->params->clock_host_hz};
 }
+#if SNAP_ADRENO_COHERENT
+/* gpu_ops with the leaf word the self-test chose (0, today's, until it passed), for every path that writes or checks a
+ * mirror leaf: the DART mirror (map, unmap) and the guest GPU calls (fence, cache, FILL32, IB). A path given plain
+ * gpu_ops by mistake fails closed: its placement checks refuse the coherent leaves, or its mirror writes today's. */
+static struct adreno_ops gpu_leaf_ops(struct context *c)
+{
+    struct adreno_ops o=gpu_ops(c);
+    o.leaf=c->root_ext->gpu_coherent.leaf;
+    return o;
+}
+#define GPU_LEAF_OPS(c) gpu_leaf_ops(c)
+#else
+#define GPU_LEAF_OPS(c) gpu_ops(c)
+#endif
 static int aic_model(const struct context *c)
 {
     for (unsigned i=0;i<c->params->model_count;i++)
@@ -166,6 +180,40 @@ static void gpu_ib_poll_hvc(struct context *c, uint64_t *frame, uint64_t elr)
     for (unsigned n = 0; n < 4; n++) frame[n] = r[n];
 }
 #endif
+#if SNAP_ADRENO_COHERENT
+/* ADRENO_GUEST_COHERENT's epoch is attr_updates.cleans + 1: every frame an SPTM SH/AttrIndx change cleans is counted
+ * there (sptm_attr_clean, attr_clean_note), under the token, and nothing resets it, so a kext verdict made at one
+ * epoch is stale as soon as any attribute changed. root_ext exists whenever the guest runs (SNAP_ROOT_CACHE_WIDE:
+ * xnuboot_setup takes its pages before anything else), so the GPU paths below use it unchecked. */
+/* Whether a 16 KiB guest frame is Normal write-back for the CPU right now: the AttrIndx of its physical-aperture
+ * leaf in the guest's kernel tables. XNU keeps one WIMG per managed page and rewrites the aperture with every change
+ * (pmap_batch_set_cache_attributes -> UPDATE_DISJOINT_MULTIPAGE's aperture step). sptm_papt_prepare_attr changes the
+ * linear alias and, for a frame SLIDE_REGION moved, the alias phystokv uses together, so the linear one is the
+ * frame's attribute. Anything this walk cannot prove reads as not write-back, which only keeps maintenance. */
+static struct sptm_aperture xnu_aperture(const struct context *);
+static int gpu_aperture_writeback(struct context *c,uint64_t pa)
+{
+    struct sptm_aperture a=xnu_aperture(c);
+    uint64_t va=(pa&0x3fff) ? 0 : sptm_aperture_pointer(&a,pa,0x4000),table=c->params->ttbr1_root;
+    if (!va || (va&0x3fff) || va<0xffff800000000000UL || !table || (table&0x3fff)) return 0;
+    for (unsigned level=1;level<=3;level++) {
+        volatile uint8_t *page=sptm_map(c,table,0x4000);
+        if (!page) return 0;
+        /* 16 KiB granule, levels 1..3: 11 index bits each above the 14-bit page offset (shadow/mmu.c mmu_index). */
+        uint64_t d=*(volatile uint64_t *)(page+8UL*((va>>(14+11*(3-level)))&0x7ff));
+        if (level==3)
+            return (d&3)==3 && (d&0x0000ffffffffc000UL)==pa && ADRENO_COHERENT_CPU_WB((unsigned)((d>>2)&7));
+        if ((d&~0x0000ffffffffc000UL)!=3) return 0;
+        table=d&0x0000ffffffffc000UL;
+    }
+    return 0;
+}
+/* adreno_guest_cache_filtered's oracle (the kext counts what it skips and what x2 says was still maintained). */
+static int gpu_cpu_writeback(void *ctx,uint64_t pa)
+{
+    return gpu_aperture_writeback(ctx,pa);
+}
+#endif
 static int64_t gpu_prepare(struct context *c)
 {
     const struct params *p=c->params;
@@ -195,6 +243,17 @@ static int64_t gpu_prepare(struct context *c)
         record(c,EV_GPU_RING,0,0x534e0001u,(uint64_t)(int64_t)e,c->gpu.fence_ticks);
     }
     c->gpu.run_at=service_profile_clock()+g.ring_at_seconds*p->clock_host_hz;
+#if SNAP_ADRENO_COHERENT
+    /* Before the guest exists and before recovery snapshots the CP: the mirror is empty, so the leaf word can still
+     * change. The record is written whatever the outcome; an OFF state keeps today's leaves and maintenance. */
+    if (c->root_ext) {
+        struct adreno_coherent_state *cs=&c->root_ext->gpu_coherent;
+        /* The sweep reads the first 24 MiB of guest RAM (GiBs on every A16 profile), nothing else. */
+        adreno_coherent_selftest(&o,&g,&c->gpu,cs,p->mem_low,ADRENO_COHERENT_SWEEP_MAX,p->mem_low,p->mem_high);
+        record(c,EV_GPU_COHERENT,cs->pmu[0],cs->state<<32|cs->detail,cs->passed|cs->pmu[1]<<16,
+               cs->stale[0]<<32|cs->stale[1]);
+    }
+#endif
 #if SNAP_ADRENO_RECOVER
     if (c->root_ext) adreno_recover_init(&o,&g,&c->gpu,GPU_RECOVER(c));   /* agents/gpu-recovery R8 */
 #endif

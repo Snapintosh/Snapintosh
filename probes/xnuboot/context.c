@@ -612,6 +612,11 @@ struct root_ext {
         uint64_t preclean_hits,inline_cleans,same_class,patched,unpatched,variants,closes,barrier_closes,failures;
     } multipage_fast;
 #endif
+#if SNAP_ADRENO_COHERENT
+    /* SNAP_ADRENO_COHERENT: the self-test's outcome and the run's mirror leaf word, under the token. Last, so no other
+     * member moves. */
+    struct adreno_coherent_state gpu_coherent;
+#endif
 };
 #if ADRENO_VA_WIDE && SNAP_DART_WIREDCNT
 /* The wide bitmap replaces the context's field for all monitor code (as user_roots below). */

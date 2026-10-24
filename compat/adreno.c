@@ -116,6 +116,13 @@ static int tlbi(const struct adreno_ops *o, const struct adreno_params *p, struc
     s->tlbi++;
     return 0;
 }
+#if SNAP_ADRENO_COHERENT
+/* compat/adreno-coherent.c maps and unmaps its own test leaves and needs the same invalidation as the mirror. */
+int adreno_mirror_tlbi(const struct adreno_ops *o, const struct adreno_params *p, struct adreno_state *s)
+{
+    return tlbi(o, p, s);
+}
+#endif
 
 int adreno_adopt(const struct adreno_ops *o, const struct adreno_params *p,
                  struct adreno_state *s, uint64_t mem_low, uint64_t mem_high)
@@ -379,7 +386,7 @@ int adreno_guest_fence(const struct adreno_ops *o, const struct adreno_params *p
         pa < mem_low || pa >= mem_high || mem_high - pa < 0x4000 ||
         (pa < p->arena_base + p->arena_size && p->arena_base < pa + 0x4000)) goto out;
     pa += offset;
-    if (RD64(o, L3_SLOT(p, va)) != ((pa & ~0xfffUL) | ADRENO_PTE_LEAF)) goto out;
+    if (RD64(o, L3_SLOT(p, va)) != ((pa & ~0xfffUL) | ADRENO_LEAF(o))) goto out;
     e = fence_at(o, p, s, pa, va, (uint32_t)value);
 out:
     if (e) s->fence_error = (uint64_t)(int64_t)e;
@@ -390,12 +397,27 @@ out:
     return e;
 }
 
+#if SNAP_ADRENO_COHERENT
+/* adreno_guest_cache, and with `writeback` its coherent variant (compat/adreno-coherent.c): the same validation and
+ * refusals, then no maintenance for a frame writeback() reports as the CPU's Normal write-back; regs[2] is then the
+ * bytes still maintained. Under the service token no attribute change runs between the passes. */
+int adreno_guest_cache_filtered(const struct adreno_ops *o, const struct adreno_params *p,
+                                struct adreno_state *s, uint64_t regs[4],
+                                uint64_t (*leaf)(void *ctx, uint64_t iova), void *leaf_ctx,
+                                uint64_t mem_low, uint64_t mem_high,
+                                int (*writeback)(void *ctx, uint64_t pa), void *writeback_ctx)
+#else
 int adreno_guest_cache(const struct adreno_ops *o, const struct adreno_params *p,
                        struct adreno_state *s, uint64_t regs[4],
                        uint64_t (*leaf)(void *ctx, uint64_t iova), void *leaf_ctx,
                        uint64_t mem_low, uint64_t mem_high)
+#endif
 {
     uint64_t va=regs[1], size=regs[2], direction=regs[3];
+#if SNAP_ADRENO_COHERENT
+    uint64_t maintained=0;
+    if (writeback) direction&=~(uint64_t)ADRENO_CACHE_COHERENT;
+#endif
     int e=ADRENO_E_PARAMS;
     if (s->quiesce || regs[0]!=ADRENO_GUEST_CACHE || !leaf ||
         (direction!=ADRENO_CACHE_TO_DEVICE && direction!=ADRENO_CACHE_FROM_DEVICE) ||
@@ -428,19 +450,37 @@ int adreno_guest_cache(const struct adreno_ops *o, const struct adreno_params *p
                     pa<mem_low || pa>=mem_high || mem_high-pa<0x4000 ||
                     (pa<p->arena_base+p->arena_size && p->arena_base<pa+0x4000)) goto out;
                 for (uint64_t sub=at&~0xfffUL;sub<at+bytes;sub+=0x1000) {
-                    uint64_t want=(pa+(sub&0x3fff))|ADRENO_PTE_LEAF|(d&4?ADRENO_PTE_RDONLY:0);
+                    uint64_t want=(pa+(sub&0x3fff))|ADRENO_LEAF(o)|(d&4?ADRENO_PTE_RDONLY:0);
                     if (RD64(o,L3_SLOT(p,sub))!=want) goto out;
                 }
+#if SNAP_ADRENO_COHERENT
+            } else if (writeback && writeback(writeback_ctx,pa)) {
+            } else if ((maintained+=bytes,direction==ADRENO_CACHE_TO_DEVICE)) CLEAN(o,pa+offset,bytes);
+#else
             } else if (direction==ADRENO_CACHE_TO_DEVICE) CLEAN(o,pa+offset,bytes);
+#endif
             else INVALIDATE(o,pa+offset,bytes);
             at+=bytes;
         }
     }
     e=0;
 out:
+#if SNAP_ADRENO_COHERENT
+    regs[0]=(uint64_t)(int64_t)e;regs[1]=e?0:size;regs[2]=e?0:maintained*!!writeback;regs[3]=s->wptr;
+    return e;
+}
+int adreno_guest_cache(const struct adreno_ops *o, const struct adreno_params *p,
+                       struct adreno_state *s, uint64_t regs[4],
+                       uint64_t (*leaf)(void *ctx, uint64_t iova), void *leaf_ctx,
+                       uint64_t mem_low, uint64_t mem_high)
+{
+    return adreno_guest_cache_filtered(o,p,s,regs,leaf,leaf_ctx,mem_low,mem_high,0,0);
+}
+#else
     regs[0]=(uint64_t)(int64_t)e;regs[1]=e?0:size;regs[2]=0;regs[3]=s->wptr;
     return e;
 }
+#endif
 
 int adreno_guest_unmap(const struct adreno_ops *o, const struct adreno_params *p,
                        struct adreno_state *s, uint64_t regs[4],
@@ -499,7 +539,7 @@ int adreno_mirror(const struct adreno_ops *o, const struct adreno_params *p,
         for (unsigned k = 0; k < 4; k++) {
             uint64_t slot = L3_SLOT(p, va + k * 0x1000);
             uint64_t want = ok && begin < (k + 1) * 0x1000UL && stop > k * 0x1000UL ?
-                (pa + k * 0x1000) | ADRENO_PTE_LEAF | (d & 4 ? ADRENO_PTE_RDONLY : 0) : 0;
+                (pa + k * 0x1000) | ADRENO_LEAF(o) | (d & 4 ? ADRENO_PTE_RDONLY : 0) : 0;
             uint64_t old = RD64(o, slot);
             if (old == want) continue;
             WR64(o, slot, want);

@@ -25,12 +25,21 @@ LLVM = Path('/opt/homebrew/opt/llvm/bin')
 LLD = '/opt/homebrew/opt/lld/bin/ld.lld' if Path('/opt/homebrew/opt/lld/bin/ld.lld').exists() else 'ld.lld'
 
 
-def multi_sources(tree):
+def run_py_literal(tree, name):
     mod = ast.parse((tree / 'probes/run.py').read_text())
     for node in mod.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'MULTI' for t in node.targets):
-            return ast.literal_eval(node.value)['xnuboot']
-    raise SystemExit('no MULTI in run.py')
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return ast.literal_eval(node.value)
+    return None
+
+
+def multi_sources(tree, flags=()):
+    multi = run_py_literal(tree, 'MULTI')
+    if multi is None:
+        raise SystemExit('no MULTI in run.py')
+    # run.py's OPTIONAL units: linked only when their define is in the flags (run.py optional_sources).
+    optional = run_py_literal(tree, 'OPTIONAL') or {}
+    return multi['xnuboot'] + [rel for define, rel in optional.get('xnuboot', ()) if define in flags]
 
 
 def build(tree, out, flags):
@@ -38,7 +47,7 @@ def build(tree, out, flags):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
     objs = []
-    for rel in multi_sources(tree):
+    for rel in multi_sources(tree, flags):
         src = tree / rel
         obj = out / (src.stem + '-' + src.suffix.lstrip('.') + '.o')
         subprocess.run([str(LLVM / 'clang'), *flags, f'-I{tree / "shadow"}',

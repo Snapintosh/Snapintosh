@@ -134,7 +134,7 @@ static int fine_dart_call(struct context *c,uint64_t *frame,struct fine_call_sta
     /* Stage 4: stream 0 of the Adreno virtual DART, into SMMU CB0; UNMAP
      * returns only after the SMMU TLB invalidation has completed. */
     struct gpu_leaf_ctx leaf={&memory,d};
-    struct adreno_ops o=gpu_ops(c);
+    struct adreno_ops o=GPU_LEAF_OPS(c);
     /* Under the device lock; atomic like every context word a converted
      * call writes outside aux (adreno_mirror's own counters are the device
      * lock's: the token path is excluded by the gate). */

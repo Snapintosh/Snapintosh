@@ -142,11 +142,22 @@ static void violation(const char *fmt, ...)
     cp.stall = 1;                                /* the CP halts: CP_HW_ERROR, as the A16 reports it */
     cp.int0 |= 1u << 9;
 }
+#ifdef ADRENO_RING_SNOOP
+/* tools/test-adreno-coherent.c: the includer models an interconnect that may snoop the CPU's
+ * cache for a GPU access through a coherent leaf. ring_snoop_read answers a read (1) or leaves it to DRAM (0);
+ * ring_snoop_write runs before a GPU write reaches DRAM. gpu_leaf is the leaf of the access being made. */
+static uint64_t gpu_leaf;
+static int ring_snoop_read(uint64_t leaf, uint64_t pa, uint32_t *v);
+static void ring_snoop_write(uint64_t leaf, uint64_t pa);
+#endif
 /* CB0 as the GPU sees it: a missing leaf is a translation fault, a write to a read-only leaf a permission
  * fault; both are recorded in FSR and stop the access. */
 static int gpu_pa(uint64_t va, int write, uint64_t *pa)
 {
     uint64_t leaf = smmu_walk(va, 1);           /* the walk refuses VAs past CB0's T0SZ (32, or 30 wide) */
+#ifdef ADRENO_RING_SNOOP
+    gpu_leaf = leaf;
+#endif
     if (!leaf) { r.fsr |= 2; r.far_lo = (uint32_t)va; r.far_hi = (uint32_t)(va >> 32); return 0; }
     if (write && (leaf & ADRENO_PTE_RDONLY)) {
         r.fsr |= 8; r.far_lo = (uint32_t)va; r.far_hi = (uint32_t)(va >> 32); return 0;
@@ -158,6 +169,9 @@ static int gpu_rd32(uint64_t va, uint32_t *v)
 {
     uint64_t pa;
     if (!gpu_pa(va, 0, &pa)) return 0;
+#ifdef ADRENO_RING_SNOOP
+    if (ring_snoop_read(gpu_leaf, pa, v)) return 1;
+#endif
     memcpy(v, dram + ram_offset(pa, 4), 4);
     return 1;
 }
@@ -165,6 +179,9 @@ static int gpu_wr32(uint64_t va, uint32_t v)
 {
     uint64_t pa;
     if (!gpu_pa(va, 1, &pa)) return 0;
+#ifdef ADRENO_RING_SNOOP
+    ring_snoop_write(gpu_leaf, pa);
+#endif
     dev_wr32(pa, v);
     return 1;
 }
@@ -173,6 +190,9 @@ static void ccu_clean(void)
     for (unsigned i = 0; i < nccu; i++) dev_wr32(ccu[i].pa, ccu[i].v);
     nccu = 0;
 }
+#ifdef ADRENO_RING_IB_HOOK
+static int ib_extra_op(uint32_t op, const uint32_t *b, uint32_t count);
+#endif
 #ifdef ADRENO_RING_HOOKS
 /* agents/gpu-recovery (tools/test-adreno-recover.c): the includer models more of the GPU. ring_event_hook sees every
  * CP_EVENT_WRITE7 event (its own caches); ring_extra_op runs a ring opcode this model does not know (1: handled). */
@@ -927,7 +947,11 @@ static void ib_packet(uint32_t op, const uint32_t *b, uint32_t cnt)
         for (uint32_t i = 2; i < cnt; i++)
             if (!gpu_wr32((b[0] | (uint64_t)b[1] << 32) + 4ull * (i - 2), b[i])) { cp.stall = 1; return; }
         break;
-    default: violation("opcode %#x in an IB is not modeled", op);
+    default:
+#ifdef ADRENO_RING_IB_HOOK
+        if (ib_extra_op(op, b, cnt)) break;        /* the includer models more IB packets (CP_MEMCPY) */
+#endif
+        violation("opcode %#x in an IB is not modeled", op);
     }
 }
 static void run_ib(uint64_t va, uint32_t dwords)

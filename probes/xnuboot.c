@@ -772,6 +772,14 @@ _Static_assert(!SNAP_INCREMENTAL_PUBLISH_VERIFY || SNAP_INCREMENTAL_PUBLISH,
 #include "../compat/adreno.h"
 #include "../compat/adreno-fill.h"
 #include "../compat/adreno-ib.h"
+#if SNAP_ADRENO_COHERENT
+/* SNAP_ADRENO_COHERENT: the boot self-test that may make CB0's mirror leaves IO-coherent, the
+ * ADRENO_GUEST_COHERENT query and the coherent ADRENO_GUEST_CACHE variant. Its state is in root_ext. */
+#include "../compat/adreno-coherent.h"
+#if !SNAP_ROOT_CACHE_WIDE
+#error "SNAP_ADRENO_COHERENT keeps its state in root_ext: it needs SNAP_ROOT_CACHE_WIDE"
+#endif
+#endif
 #include "../compat/ans.h"
 #include "../compat/ans-window.h"
 #include "../compat/nvme-host.h"

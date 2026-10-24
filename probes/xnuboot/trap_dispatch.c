@@ -584,6 +584,13 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
                 return 0;
             }
 #endif
+#if SNAP_ADRENO_COHERENT
+            if (frame[0] == ADRENO_GUEST_COHERENT) {
+                /* QUERY, under the token like the rest of the GPU state; the epoch is attr_updates.cleans + 1. */
+                adreno_coherent_query(&c->root_ext->gpu_coherent, c->attr_updates.cleans + 1, frame);
+                return 0;
+            }
+#endif
 #if SNAP_ADRENO_RECOVER
             if (frame[0] == ADRENO_GUEST_RECOVER) {
                 gpu_recover_hvc(c, frame, *elr);
@@ -600,7 +607,7 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
                     (unsigned)p->model_count, 5, SPTM_DART_ADRENO, 0, 2, &index) == DEVICE_OK) {
                 struct sptm_memory memory = sptm_context_memory(c);
                 struct gpu_leaf_ctx leaf = {&memory, &c->model_state[index].dart};
-                struct adreno_ops o = gpu_ops(c);
+                struct adreno_ops o = GPU_LEAF_OPS(c);
 #if SNAP_GPU_DVFS
                 /* G18: the first IB of a burst runs at the ceiling: vote it before this doorbell (once per burst;
                  * every IB holds it). A START refused because a flight is active is not a doorbell. */
@@ -624,6 +631,11 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
                 e = r[0] == ADRENO_GUEST_UNMAP ?
                     adreno_guest_unmap(&o, &p->gpu, &c->gpu, r, gpu_leaf, gpu_unmap, &leaf,
                                        p->mem_low, p->mem_high) :
+#if SNAP_ADRENO_COHERENT
+                    r[0] == ADRENO_GUEST_CACHE && (r[3] & ADRENO_CACHE_COHERENT) ?
+                    adreno_coherent_cache(&o, &p->gpu, &c->gpu, &c->root_ext->gpu_coherent, r, gpu_leaf, &leaf,
+                                          gpu_cpu_writeback, c, p->mem_low, p->mem_high) :
+#endif
                     r[0] == ADRENO_GUEST_CACHE ?
                     adreno_guest_cache(&o, &p->gpu, &c->gpu, r, gpu_leaf, &leaf,
                                        p->mem_low, p->mem_high) :
