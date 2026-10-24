@@ -189,6 +189,11 @@
  * kext takes it as ON only with its own boot-arg adreno_coherent_force=1, and says so loudly either way. */
 #define ADRENO_COHERENT_DETAIL_FORCED 0x2000u
 
+/* ---- Panel brightness: ADRENO_GUEST_BACKLIGHT (monitor SNAP_EDP_BACKLIGHT) ------------------------------------------
+ * QUERY and SET of the panel's DPCD backlight level over the eDP AUX channel; ABI, states and errors in
+ * compat/edp-backlight.h. No ADT property: discovery is QUERY, which a monitor without it refuses (ADRENO_E_PARAMS). */
+#define ADRENO_GUEST_BACKLIGHT 0x0001000C
+
 /* ---- Ring wrap (design S1; shared by FENCE, FILL32 and IB) ----------------------------------------------
  * The ring is ADRENO_RING_DWORDS(CP_RB_CNTL.BUFSZ) dwords (q1n1 writes BUFSZ ADRENO_RING_BUFSZ = 8192 dwords);
  * the monitor adopts it only when p->ring_dwords matches. Submissions stay synchronous: an emit starts with
