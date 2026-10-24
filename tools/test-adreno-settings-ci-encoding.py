@@ -10,11 +10,12 @@ AdrenoIBComputeSamplers) and standing in for a kext that publishes AdrenoIBCompu
   - every single-input kernel is encoded, nothing omitted; its package's CS T# for the source texture has the format's
     FMT6, swap, own channel mapping and sRGB decode (Mesa fd6_format_table; A8 as the fragment sampler encodes it),
     linear tiling, the texture's size and a 64-byte-multiple pitch; the single shape keeps one sampler unit, a T# table of
-    T#0 (null) + T#1 and SP_CS_CONFIG NTEX 1 / NSAMP 1 / NUAV 2;
+    T#0 (null) + T#1 and SP_CS_CONFIG NTEX 1 / NSAMP 1 / NUAV 2 (with --cs-tables, a plug-in built with ADRENO_CS_TABLES:
+    NTEX 2 / NSAMP 2 / NUAV 1, Mesa's counts);
   - the two-input kernel: without the property it is omitted, naming AdrenoIBComputeSamplers, and no package carries a
     CS sampler load of more than one unit; with it, it is encoded with a 3-entry T# table (null, the two inputs, each
     relocated READ to its own texture with its own format), a 2-unit sampler table of clamping samplers, SP_CS_TSIZE 3
-    and SP_CS_CONFIG NTEX 3 / NSAMP 2;
+    and SP_CS_CONFIG NTEX 3 / NSAMP 2 / NUAV 2 (--cs-tables: NTEX 3 / NSAMP 3 / NUAV 1, a third, zero, sampler entry);
   - a replaceRegion/getBytes round trip of each format returns the written bytes on the plug-in device and on this
     Mac's GPU (the CPU layout of the textures CoreImage uploads icons into);
   - every package replays through the production validator, except the two-input package, which that validator must
@@ -23,7 +24,7 @@ AdrenoIBComputeSamplers) and standing in for a kext that publishes AdrenoIBCompu
 --expect-before: the unchanged plug-in must fail at least one of these.
 
     python3 tools/test-adreno-settings-ci-encoding.py --bundle BUNDLE --output NEW-DIR [--expect-before]
-        [--cs-samplers-validator]
+        [--cs-samplers-validator] [--cs-tables]
 """
 import argparse
 import importlib.util
@@ -61,6 +62,9 @@ EXPECT = {71: ('FMT6_8_8_8_8_UNORM', 'WZYX', 'XYZW', 1, 4), 81: ('FMT6_8_8_8_8_U
           90: ('FMT6_10_10_10_2_UNORM', 'WZYX', 'XYZW', 0, 4)}
 SWZ = {'X': 'X', 'Y': 'Y', 'Z': 'Z', 'W': 'W', '0': 'ZERO', '1': 'ONE'}
 GATE = '(AdrenoIBComputeSamplers)'
+# (T# units, sampler units, TSIZE, NTEX, NSAMP, NUAV) of the single and two-input packages; --cs-tables selects Mesa's.
+SHAPES = {False: ((2, 1, 2, 1, 1, 2), (3, 2, 3, 3, 2, 2)), True: ((2, 1, 2, 2, 2, 1), (3, 2, 3, 3, 3, 1))}
+CS_TABLES = False
 checks, failures = 0, []
 
 
@@ -174,13 +178,14 @@ def verify(out, report, gated, replays, proposal):
             check(table is not None, f'{name}: CS T# load without a package table')
             if table is None:
                 continue
+            single_shape, multi_shape = SHAPES[CS_TABLES]
             if not multi:
-                check((units, samplers, tsize, ntex, nsamp, nuav) == (2, 1, 2, 1, 1, 2),
+                check((units, samplers, tsize, ntex, nsamp, nuav) == single_shape,
                       f'{name}: single shape T# {units} samplers {samplers} TSIZE {tsize} NTEX {ntex} NSAMP {nsamp} NUAV {nuav}')
                 check(not any(tdesc(pkg, table)['words']) and by_lo.get(table) is None, f'{name}: T#0 is not null')
                 check_texture(name, pkg, by_lo, table, 1, case['sources'][0])
             else:
-                check((units, samplers, tsize, ntex, nsamp, nuav) == (3, 2, 3, 3, 2, 2),
+                check((units, samplers, tsize, ntex, nsamp, nuav) == multi_shape,
                       f'{name}: two-input shape T# {units} samplers {samplers} TSIZE {tsize} NTEX {ntex} NSAMP {nsamp} NUAV {nuav}')
                 check(not any(tdesc(pkg, table)['words']) and by_lo.get(table) is None, f'{name}: T#0 is not null')
                 kernel = case['kernels'][0]['textures'] if case.get('kernels') else {}
@@ -196,6 +201,9 @@ def verify(out, report, gated, replays, proposal):
                     wraps = [T.dfield(w[0], 'A8XX_TEX_SAMP_0', f'WRAP_{a}') for a in 'STR']
                     check(any(w) and all(name_of('a6xx_tex_clamp', x) in ('A6XX_TEX_CLAMP_TO_EDGE', 'A6XX_TEX_CLAMP_TO_BORDER')
                                          for x in wraps), f'{name}: sampler {k} words {w} wraps {wraps}')
+                if CS_TABLES:
+                    third = [u32(pkg, st + 32 + 4 * i) for i in range(4)]
+                    check(not any(third), f'{name}: the third sampler entry (NSAMP 3) is not zero: {third}')
             for label, exe in replays:
                 rd = out / f'replay-{label}' / d
                 rd.mkdir(parents=True, exist_ok=True)
@@ -223,14 +231,16 @@ T_ds = None
 
 
 def main():
-    global T_ds
+    global T_ds, CS_TABLES
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--bundle', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     ap.add_argument('--expect-before', action='store_true')
+    ap.add_argument('--cs-tables', action='store_true', help='expect a plug-in built with ADRENO_CS_TABLES (Mesa\'s counts)')
     ap.add_argument('--cs-samplers-validator', action='store_true',
                     help='also replay through this tree\'s validator built with ADRENO_IB_CS_SAMPLERS and opted in')
     args = ap.parse_args()
+    CS_TABLES = args.cs_tables
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     exe = out / 'settings-ci-encoding'
