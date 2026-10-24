@@ -140,7 +140,7 @@ The flags fall into these groups:
 | Group | Examples |
 | --- | --- |
 | Console and early stop | `--console`, `--single-user`, `--early-stop-delay`, `--let-panic`, `--panic-serve` |
-| Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us` |
+| Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us`, `--input-fnkeys` |
 | Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline` |
 | GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--adreno-cs-samplers`, `--gpu-x290-survey` |
 | Panel brightness | `--edp-backlight`, `--edp-backlight-mode` |
@@ -202,6 +202,17 @@ refused. `--edp-backlight-mode` lets the first change switch a panel left in
 PWM-pin mode to DPCD control. `tools/survey-edp-aux.py` checks, read-only from
 q1n1, that the clocks and the AUX controller the call needs are on.
 `tools/test-edp-backlight.py` is the offline test.
+
+`--input-fnkeys FLAGS` (needs `--input`) adds the guest boot-arg
+`snap_i2c_fnkeys=FLAGS` for SnapI2CHID's keyboard Fn-key layer, which only a
+SnapI2CHID built with `PROFILE=desktop-fnkeys` has (`I2C_PROFILE=desktop-fnkeys
+tools/build-auxkc-desktop.sh NAME`); other builds ignore it. `0x1` turns the
+keyboard's ASUS hotkey report into the usages macOS's keyboards send, `0x2` logs
+what the F-row sends (rate-limited, never a key that types a character), `0x4`
+(with `0x1`) swaps F1-F12 and their hotkeys in the host on Fn+Esc, and
+`0x8`/`0x10` pick another brightness encoding
+(`drivers/snap-i2c-hid/src/hid-keyboard.h`). The sets the kext would refuse are
+refused at prepare. `tools/test-input-fnkeys.py` is the offline test.
 
 ## Installing a new Metal plug-in
 
