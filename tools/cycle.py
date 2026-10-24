@@ -467,6 +467,9 @@ def parse(argv=None):
                    help='SNAP_EL0_CACHE_MAINT: SCTLR_EL1.UCI as SPTM installs it, so EL0 DC CVAU/CVAC/CIVAC and IC IVAU '
                         '(sys_icache_invalidate) no longer trap to EL1, where handle_msr_trap raises SIGILL; give it to '
                         'every mode of the attempt')
+    p.add_argument('--resident-mib', type=int, default=None, metavar='MIB',
+                   help='guest boot-arg adreno_resident_mib=MIB: AdrenoX2 resident-map budget (0 = off, max 4096; '
+                        'agents/resident-evict recommends 1536); give it to every mode of the attempt')
     p.add_argument('--present-maint', action='store_true',
                    help='guest boot-arg adreno_present_maint=1: AdrenoDisplay keeps its layer-0 clean+invalidate pass '
                         'even while the beam is LOCKED (tear-free fix2 skips it then); for b12v8\'s stale bands; '

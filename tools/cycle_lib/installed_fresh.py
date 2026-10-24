@@ -1099,6 +1099,10 @@ def boot_addition(args):
     extra = []
     if getattr(args, 'present_maint', False):
         extra.append('adreno_present_maint=1')
+    resident_mib = getattr(args, 'resident_mib', None)
+    if resident_mib is not None:
+        need(0 <= resident_mib <= 4096, '--resident-mib must be 0..4096')
+        extra.append(f'adreno_resident_mib={resident_mib}')
     # --present-latch's guest boot-args (AdrenoDisplay start_hardware, SnapI2CHIDBus::start); none without the flag.
     latch_us, hold = getattr(args, 'present_latch_us', None), getattr(args, 'present_hold', None)
     margin_us, active_us = getattr(args, 'present_hold_margin_us', None), getattr(args, 'input_active_us', None)
