@@ -4,7 +4,7 @@
   "device": "udp://enN",
   "base_launcher": {
     "path": "Snapintosh/tools/run-sks-transport-candidate.py",
-    "sha256": "52fe215a9a4779ebc50f01ecaafb4a4210d2b506b09e6ee10a5fbb089a5cc6b8"
+    "sha256": "c967ab84340e8d760f3241b5d37f7e8087d1284e2821e3b5a407649efb0b0822"
   },
   "stages_source": "q1n1-stage.bin and q1n1-stage-alt.bin as `make uefi` builds them in the Snapintosh q1n1 repository at 7872398 (branch migrate-private): the same bytes as the integration tree's q1n1 build, whose q1n1-stage.bin the b12v23 desktop run recorded (stage_bin_sha256). Rebuild q1n1 and pin your own pair if yours differ.",
   "stages": {
@@ -62,7 +62,7 @@
   "storage": {
     "persistence": {
       "path": "Snapintosh/tools/capture-apfs-persistence.py",
-      "sha256": "4d59b3dfb33425c5ec56312d76dc4015507310a9664f3d9f993fe9e81da53c05"
+      "sha256": "f2d49308b4474682d78c237e24b71002c06c3f18d584f852c3433383eee129b9"
     },
     "snapshot": {
       "path": "Snapintosh/build/snapshot-installed-metal-20260926.py",
