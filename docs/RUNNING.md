@@ -147,6 +147,7 @@ The flags fall into these groups:
 | Clocks and bandwidth | `--thermal-guard`, `--gpu-dvfs`, `--gpu-dvfs-ceiling`, `--cpu-dvfs`, `--ddr-vote`, `--llcc`, `--bw-probe` |
 | Storage | `--nvme-async`, `--nvme-converted` |
 | Wi-Fi | `--qcc2072-wifi`, `--qcc2072-auxkc`, `--qcc2072-auxkc-sha256` |
+| Kernel view pool | `--view-reclaim` |
 | Monitor performance | `--fine-locks`, `--root-cache-wide`, `--user-hw-walk`, `--fast-timer-irq`, `--fast-ipi`, `--lean-traps`, `--sptm-fine`, and others |
 | Kernel patches | `--kernel-sysreg-zero`, `--kernel-user-4k`, `--kernel-refmod-skip` ([KERNEL-PATCHES.md](KERNEL-PATCHES.md)) |
 
@@ -204,6 +205,18 @@ NAME` for a monitor without `--gpu-coherent` (`desktop-next` is
 PWM-pin mode to DPCD control. `tools/survey-edp-aux.py` checks, read-only from
 q1n1, that the clocks and the AUX controller the call needs are on.
 `tools/test-edp-backlight.py` is the offline test.
+
+`--view-reclaim` gives the monitor `SNAP_VIEW_RECLAIM`. The kernel's per-CPU
+private page-table copies (`shadow/sprr-view.h`) hold 256 tables instead of
+128, and when a protecting RETYPE (read-only zone, TXM) finds them full, the
+copies that no selector2 or selector4 leaf needs any more are retired: every
+CPU's copies are synced back to the shared tables, published and invalidated
+before their pages are reused. Without it, a desktop session stops with exit 7
+(RETYPE to ROZONE refused) once the read-only zone has grown past about 120
+frames (installed-fresh-desktop-20261024-next1: after 1,104 s). The report's
+`VIEWRCL1` record (and `summary.json` `view_reclaim`) has the count, its
+high-water mark and the reclaims. `tools/test-view-reclaim.py` is the offline
+test.
 
 `--input-fnkeys FLAGS` (needs `--input`) adds the guest boot-arg
 `snap_i2c_fnkeys=FLAGS` for SnapI2CHID's keyboard Fn-key layer, which only a

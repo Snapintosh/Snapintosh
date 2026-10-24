@@ -197,6 +197,8 @@ class Wiring(unittest.TestCase):
         src = (ROOT / 'tools/cycle_lib/installed_fresh.py').read_text()
         body = src[src.index('def variant_flags('):]
         body = body[:body.index('\n    return flags\n')]
+        # Only defines added after this one (tools/test-view-reclaim.py) may follow it.
+        body = body.replace("\n    if getattr(args, 'view_reclaim', False):\n        flags.append(VIEW_RECLAIM_DEFINE)", '')
         self.assertTrue(body.rstrip().endswith('flags.append(EDP_BACKLIGHT_DEFINE)'), 'the define is not appended last')
 
 
