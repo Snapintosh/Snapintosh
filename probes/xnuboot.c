@@ -870,6 +870,15 @@ struct guest_net_state {
 #define GUEST_NET_POLL2 4u                     /* q1n1 Q1N1_CALL_POLL2 */
 #define GUEST_NET_CALL_E_OP UINT64_C(0xffffffffffffffff)   /* Q1N1_CALL_E_OP: an older q1n1 */
 #endif
+/* SNAP_EDP_BACKLIGHT (compat/edp-backlight.h, agents/brightness): ADRENO_GUEST_BACKLIGHT sets the panel's DPCD
+ * brightness over the eDP controller's AUX channel for the kext's AdrenoBacklight, admitted like ADRENO_GUEST_STOP.
+ * Its state is one zeroed monitor page (setup.c). Off, the code is absent and compat/edp-backlight.c is not linked. */
+#ifndef SNAP_EDP_BACKLIGHT
+#define SNAP_EDP_BACKLIGHT 0
+#endif
+#if SNAP_EDP_BACKLIGHT
+#include "../compat/edp-backlight.h"
+#endif
 #include "../compat/fast-vector.h"
 _Static_assert(FAST_EXIT_CLASSES==FAST_TRAP_CLASSES-1+FAST_CROSS_CLASSES &&
                FAST_EXIT_CROSS_SLOT(1)==FAST_TRAP_CLASSES-1,

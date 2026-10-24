@@ -217,6 +217,11 @@ struct event {
                                   * control's PMU passes << 16, c = stale[0] << 32 | stale[1] (the controls'
                                   * stale words, each at most 1,024); probes/run.py decodes it */
 #endif
+#if SNAP_EDP_BACKLIGHT
+#define EV_EDP_BACKLIGHT 60      /* ADRENO_GUEST_BACKLIGHT (compat/edp-backlight.h): a = sub-op << 32 | (u32)level asked,
+                                  * b = (u32)result << 32 | the panel's level after the call, c = the reply's x1 (ABI |
+                                  * state << 8 | detail << 16 | DPCD 0x700..0x703 << 24 | mode << 56); pc = the HVC */
+#endif
 #define EV_HANDOFF   7        /* a field of the handoff was read: a = offset */
 #define EV_WATCHDOG  6        /* the guest ran too long and was taken back */
 #define EV_DISPATCH_CMD 8     /* a call that is not an endpoint call:
