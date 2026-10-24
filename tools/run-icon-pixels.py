@@ -9,7 +9,7 @@ icon caches aside). Every console command's output stays under about 4 KB.
     python3 tools/run-icon-pixels.py --device udp://enN --launch-record build/PREFIX-early-stop-launch.json \\
         --owner HEX --tool build/icon-pixels/TOOL/icon-pixels --output NEW-DIR \\
         [--reference-synth REF.txt] [--reference-icons REF.txt] [--steps push,version,synth,icons,diag] \\
-        [--move-icon-caches TAG] [--synth-timeout 1200]
+        [--move-icon-caches TAG] [--ab-env VAR=VALUE] [--synth-timeout 1200]
 
 Steps (--steps picks and orders them; each is recorded in OUTPUT/run.json):
   push     the tool as base64 in 512-character printf chunks (tools/deploy-guest-plugin.py's transfer: one numbered file
@@ -18,6 +18,8 @@ Steps (--steps picks and orders them; each is recorded in OUTPUT/run.json):
   version  `icon-pixels version`: the binary executes (an ad-hoc arm64e executable; if the guest's AMFI kills it, the
            step stops and names the trust-cache row build-icon-pixels.py recorded) and finds the plug-in device
   synth    `icon-pixels synth --repeat 2` as root: CoreImage kernels on synthetic inputs, on the plug-in device
+  synth-ab the same with --ab-env VAR=VALUE in the tool's environment, into synth-ab.txt (a plug-in built with a
+           per-process switch, such as ADRENO_CS_TABLES=0, then compares both encodings in one boot)
   icons    `icon-pixels icons --source gen` as root (IconServices' generator in-process, on the plug-in device), then,
            as the console user in that user's bootstrap context (launchctl asuser UID sudo -u #UID),
            `icon-pixels icons --source ws` (NSWorkspace, through iconservicesagent and its caches)
@@ -77,6 +79,7 @@ def main(argv=None):
     ap.add_argument('--reference-synth', type=Path)
     ap.add_argument('--reference-icons', type=Path)
     ap.add_argument('--move-icon-caches', metavar='TAG')
+    ap.add_argument('--ab-env', metavar='VAR=VALUE', help='the environment of the synth-ab step')
     ap.add_argument('--synth-args', default='--repeat 2')
     ap.add_argument('--icons-args', default='--size 20 --scale 2')
     ap.add_argument('--synth-timeout', type=int, default=1200)
@@ -88,9 +91,12 @@ def main(argv=None):
     ap.add_argument('--attempts', type=int, default=30)
     a = ap.parse_args(argv)
     steps = [s for s in a.steps.split(',') if s]
-    unknown = set(steps) - {'push', 'version', 'synth', 'icons', 'recache', 'diag'}
-    if unknown or ('recache' in steps) != bool(a.move_icon_caches):
-        ap.error(f'unknown steps {sorted(unknown)}, or recache without --move-icon-caches TAG (or the reverse)')
+    unknown = set(steps) - {'push', 'version', 'synth', 'synth-ab', 'icons', 'recache', 'diag'}
+    if unknown or ('recache' in steps) != bool(a.move_icon_caches) or ('synth-ab' in steps) != bool(a.ab_env):
+        ap.error(f'unknown steps {sorted(unknown)}, or recache without --move-icon-caches TAG, or synth-ab without '
+                 '--ab-env VAR=VALUE (or the reverse)')
+    if a.ab_env and not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}=[A-Za-z0-9._-]{0,64}', a.ab_env):
+        ap.error('--ab-env is one VAR=VALUE (upper-case name; letters, digits, dot, dash, underscore)')
     # Offline the "guest" shell is this Mac's: never restart its processes, never ask its sudo for a password.
     if a.target and 'recache' in steps:
         ap.error('recache restarts the shell machine\'s icon services, Dock and System Settings: only with --device')
@@ -172,6 +178,8 @@ def main(argv=None):
                     raise deploy.Refused(f'icon-pixels does not run: {res[-300:]!r}.{hint}')
             elif step == 'synth':
                 run_tool('synth', f'./icon-pixels synth {a.synth_args}', a.synth_timeout)
+            elif step == 'synth-ab':
+                run_tool('synth-ab', f'env {a.ab_env} ./icon-pixels synth {a.synth_args}', a.synth_timeout)
             elif step == 'icons':
                 run_tool('icons-gen', f'./icon-pixels icons --source gen {a.icons_args}', a.icons_timeout)
                 uid = a.console_user or shell.run('console-user', 'stat -f %u /dev/console').strip().splitlines()[-1]
@@ -215,7 +223,8 @@ def main(argv=None):
         rec['finished'] = time.time()
         (out / 'run.json').write_text(json.dumps(rec, indent=1) + '\n')
     compares = {}
-    for name, ref, cases in (('synth.txt', a.reference_synth, '.'), ('icons-gen.txt', a.reference_icons, '^gen-'),
+    for name, ref, cases in (('synth.txt', a.reference_synth, '.'), ('synth-ab.txt', a.reference_synth, '.'),
+                             ('icons-gen.txt', a.reference_icons, '^gen-'),
                              ('icons-ws.txt', a.reference_icons, '^ws-')):
         if ref and (out / name).is_file():
             r = subprocess.run([sys.executable, str(ROOT / 'tools/compare-icon-pixels.py'), str(ref), str(out / name),

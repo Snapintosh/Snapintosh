@@ -18,7 +18,7 @@
    tolerance that must still PASS.
 4. Unless --skip-console: tools/run-icon-pixels.py over the console stand-in (tools/test-console-link.py: q1n1's
    console handler, the monitor's console link, /bin/sh on a pty, request/reply loss and mid-line console noise)
-   pushes the tool, runs `version`, a few synth cases and two generated icons on this Mac's GPU and the diag step,
+   pushes the tool, runs `version`, a few synth cases (also with --ab-env), two generated icons and the diag step,
    fetches every line and compares them with a direct run of the same cases: identical C and K lines. (recache and
    the NSWorkspace icons act on the shell's own machine, so the runner refuses them offline.)
 """
@@ -215,7 +215,8 @@ def console_end_to_end(out, tool, noise_rate):
         r = subprocess.run([sys.executable, str(ROOT / 'tools/run-icon-pixels.py'), '--target', f'127.0.0.1:{h.port}',
                             '--session', f'{cl.SESSION:x}', '--owner', '5eedc0de51', '--guest-root', str(guest),
                             '--tool', str(tool), '--output', str(out / 'console-run'),
-                            '--steps', 'push,version,synth,icons,diag', '--console-user', '0',
+                            '--steps', 'push,version,synth,synth-ab,icons,diag', '--console-user', '0',
+                            '--ab-env', 'ADRENO_CS_TABLES=0',
                             '--synth-args', f"--repeat 1 --cases '{cases}'",
                             '--icons-args', "--cases 'gen-(home|folder)'", '--poll-ms', '20', '--wait-ms', '60',
                             '--attempts', '5'],
@@ -234,6 +235,8 @@ def console_end_to_end(out, tool, noise_rate):
     want = same(direct.stdout)
     check(same(got) == want and len(want) == 8,
           f'fetched C/K lines differ from a direct run ({len(same(got))} vs {len(want)} lines)')
+    ab = (out / 'console-run/synth-ab.txt').read_text() if (out / 'console-run/synth-ab.txt').is_file() else ''
+    check(same(ab) == want and rec.get('synth-ab_rc') == 0, f'synth-ab lines differ from a direct run ({len(same(ab))} lines)')
     icons = (out / 'console-run/icons-gen.txt').read_text() if (out / 'console-run/icons-gen.txt').is_file() else ''
     check(len(kind_lines(icons, ('I ',))) == 2 and all(' st=ok ' in l for l in kind_lines(icons, ('I ',))),
           f'icons step: {kind_lines(icons, ("I ",))}')
