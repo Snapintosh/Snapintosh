@@ -15,6 +15,10 @@
  *     drivers/snap-i2c-hid/src/hid-pointer.c drivers/snap-i2c-hid/src/hid-ptp.c \
  *     -o build/test-snap-i2c-hid && build/test-snap-i2c-hid
  *
+ * Built with -DSNAP_I2C_HID_FNKEYS=1 it also runs the keyboard's Fn-key layer
+ * (test-snap-i2c-hid/fnkeys.c, against hid-keyboard.c built with the same define);
+ * tools/test-snap-i2c-hid-kext.py runs both builds.
+ *
  * The Precision Touchpad groups (test_ptp_*) cover failure modes F1-F22 of
  * docs/A16-INPUT-PTP-20261020.md, written before src/hid-ptp.c: the real A16
  * descriptor, frames encoded by hand from its decoded offsets (not from the
@@ -3191,6 +3195,10 @@ static void test_mt_frames(void)
     CHECK(mt_at(&MF[0].c[0], 2381, 1550) && near(MF[0].c[0].x, 0, 2) && near(MF[0].c[0].y, 5000, 2));
 }
 
+#if SNAP_I2C_HID_FNKEYS
+#include "test-snap-i2c-hid/fnkeys.c"
+#endif
+
 int main(void)
 {
     test_start_and_stop();
@@ -3227,6 +3235,11 @@ int main(void)
     test_ptp_reset_and_reports();
     test_mt_features();
     test_mt_frames();
+#if SNAP_I2C_HID_FNKEYS
+    test_fnkeys();
+    printf("test-snap-i2c-hid: %u checks passed (34 groups and the Fn-key layer's 8)\n", checks);
+#else
     printf("test-snap-i2c-hid: %u checks passed (34 groups)\n", checks);
+#endif
     return 0;
 }
