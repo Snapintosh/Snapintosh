@@ -74,6 +74,7 @@ int aes_hardware_supported(uint64_t isar0)
 {
     return ((isar0>>4)&15)!=0;
 }
+#if defined(__aarch64__)
 /* FIPS-197 byte order matches ld1 {.16b}: rounds-1 AESE+AESMC, one AESE, EOR.
  * The guest's v0/v1 stay live across EL2 entry, so both are saved first and
  * restored last; the saved copy is cleared afterwards. */
@@ -98,6 +99,7 @@ static void block_hardware(const struct aes_key *key,const uint8_t input[16],uin
         :"memory","cc");
     aes_clear(saved,sizeof(saved));
 }
+#endif
 static int valid(const struct aes_key *key,const uint8_t *input,const uint8_t *output,int decrypt)
 {
     if (!key || !input || !output || (decrypt!=0 && decrypt!=1) ||
@@ -108,8 +110,13 @@ static int valid(const struct aes_key *key,const uint8_t *input,const uint8_t *o
 }
 int aes_encrypt_hardware(const struct aes_key *key,const uint8_t input[16],uint8_t output[16])
 {
+#if defined(__aarch64__)
     if (!valid(key,input,output,0)) return 0;
     block_hardware(key,input,output);return 1;
+#else
+    (void)key; (void)input; (void)output;
+    return 0;
+#endif
 }
 int aes_block(const struct aes_key *key,const uint8_t input[16],uint8_t output[16],int decrypt)
 {
@@ -118,11 +125,13 @@ int aes_block(const struct aes_key *key,const uint8_t input[16],uint8_t output[1
     add_key(s,key->round_key+(decrypt ? key->rounds*16 : 0));
     for (unsigned round=1;round<=key->rounds;round++) {
         if (decrypt) {
-            shift(s,1);for (unsigned i=0;i<16;i++) s[i]=unsub(s[i]);
+            shift(s,1);
+            for (unsigned i=0;i<16;i++) s[i]=unsub(s[i]);
             add_key(s,key->round_key+(key->rounds-round)*16);
             if (round<key->rounds) mix(s,1);
         } else {
-            for (unsigned i=0;i<16;i++) s[i]=sub(s[i]);shift(s,0);
+            for (unsigned i=0;i<16;i++) s[i]=sub(s[i]);
+            shift(s,0);
             if (round<key->rounds) mix(s,0);
             add_key(s,key->round_key+round*16);
         }

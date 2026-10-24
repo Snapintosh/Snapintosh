@@ -14,6 +14,9 @@ struct sep_sks_wire_state {
     uint8_t environment[SEP_SKS_ENV_BYTES];
 };
 
+/* q1n1 SHA-256 hash helper used for SKS request verification */
+void q1n1_sha256(const void *data, uint64_t len, uint8_t digest[32]);
+
 /* Nonzero results are explicit failures, not named Apple firmware error enums.
  * The native wrapper propagates nonzero transport status without decoding OOL.
  * A later mailbox adapter must verify that mapping before advertising SKS. */
