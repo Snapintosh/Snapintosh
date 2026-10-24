@@ -68,14 +68,25 @@
 #define DPCD_EDP_PWMGEN_BITS_MASK   0x1Fu
 
 /* ---- Policy ------------------------------------------------------------------------------------------------------ */
-/* The lowest level the monitor writes, in thousandths of full scale (at least level 1). An OLED's DPCD level need
- * not be linear in luminance: until a hardware run measures the curve, 10% keeps the panel visibly lit even if the
- * TCON applies a 2.2 gamma (about 0.6% of peak). The guest cannot lower it; the top is the panel's own maximum. */
-#define EDP_BL_FLOOR_PERMILLE       100u
+/* The lowest level the monitor writes, in thousandths of full scale (at least level 1); the guest cannot go below it
+ * and the top is the panel's own maximum. What is known (run next1b and the A16 DSDT, AGENTS.md labels):
+ *  - OBSERVED: 11-bit levels 0..2047; the firmware/Windows left level 716 (35% of full scale).
+ *  - VERIFIED: the DSDT panel table for 0x834C/0x422C names it "Generic OLED Panel HDR" and gives Windows' nits-based
+ *    brightness BrightnessRangeLevel0 "5000 500000 1000 2" and BrightnessRangeLowOffset 10000 (INFERRED: millinits,
+ *    so 5..500 nits with a 10-nit low offset).
+ *  - Nothing measures the panel's luminance per level. If it is linear in luminance (INFERRED: the table describes
+ *    the panel to Windows only by a nits range; edp_bl_nits_to_level uses this model), the previous 10% floor
+ *    (level 205) was ~50 nits, ten times Windows' minimum, so the bottom of the macOS slider could not be dim.
+ * 2% is level 41 on this panel: ~10 nits under the linear model, the table's low offset and twice Windows' minimum,
+ * so the bottom of the slider is dim but readable. If the TCON instead followed a 2.2 power law it would be ~0.02% of
+ * peak (very dark, never off); the hardware run must look at the bottom of the slider before this is relied on, and
+ * the kext's boot-arg adreno_backlight_min_nits raises the darkest request without rebuilding the monitor. */
+#define EDP_BL_FLOOR_PERMILLE       20u
 #define EDP_BL_MAX_FAILURES         3u      /* consecutive failed SETs before the monitor stops for the boot */
 #define EDP_BL_AUX_BUDGET_DIV       200u    /* one transaction's completion budget: hz / 200 = 5 ms */
-/* The kext's nominal range for CoreBrightness, from the panel table's millinit range (INFERRED); boot-args may
- * narrow it within [EDP_BL_NITS_LIMIT_MIN, EDP_BL_NITS_LIMIT_MAX]. */
+/* The kext's nominal range for CoreBrightness, from the panel table's millinit range (INFERRED). MAX is the luminance
+ * the model assigns to the top level; MIN is the darkest request, raised to the floor's luminance when below it.
+ * Boot-args adreno_backlight_min_nits / _max_nits may set either within [EDP_BL_NITS_LIMIT_MIN, EDP_BL_NITS_LIMIT_MAX]. */
 #define EDP_BL_NITS_MIN_DEFAULT     5u
 #define EDP_BL_NITS_MAX_DEFAULT     500u
 #define EDP_BL_NITS_LIMIT_MIN       1u
@@ -184,39 +195,43 @@ static inline uint32_t edp_bl_decode(const uint8_t in[2], int lsb)
     return lsb ? (uint32_t)in[0] << 8 | in[1] : in[0];
 }
 
-/* Nits (16.16 fixed point, as CoreBrightness's "brightness-nits") to a level: linear from [min_nits, max_nits] onto
- * [floor, max], clamped at both ends. The panel's luminance curve is not known (INFERRED linear); the floor holds
- * whatever is asked. */
-static inline uint32_t edp_bl_nits_to_level(uint64_t nits_q16, uint32_t min_nits, uint32_t max_nits,
-                                            uint32_t floor, uint32_t max)
+/* The luminance model the kext maps CoreBrightness's requests with: luminance proportional to the level, the top
+ * level being max_nits (INFERRED, see EDP_BL_FLOOR_PERMILLE). Nits are 16.16 fixed point throughout, the unit of
+ * BrightnessControl's "brightness-nits". A request maps to the nearest level, clamped into [floor, max]: the bottom
+ * of the slider lands on (or near) the floor and the top on the panel's maximum. Callers keep max_nits within
+ * EDP_BL_NITS_LIMIT_MAX and max within 16 bits, so no product below exceeds 2^42. */
+static inline uint32_t edp_bl_nits_to_level(uint64_t nits_q16, uint32_t max_nits, uint32_t floor, uint32_t max)
 {
-    uint64_t lo = (uint64_t)min_nits << 16, hi = (uint64_t)max_nits << 16;
-    if (hi <= lo || max <= floor) return floor;
-    if (nits_q16 <= lo) return floor;
-    if (nits_q16 >= hi) return max;
-    return floor + (uint32_t)(((nits_q16 - lo) * (max - floor) + (hi - lo) / 2) / (hi - lo));
+    uint64_t full = (uint64_t)max_nits << 16;
+    if (!full || max <= floor) return floor;
+    if (nits_q16 >= full) return max;
+    return edp_bl_clamp((nits_q16 * max + full / 2) / full, floor, max);
 }
-static inline uint64_t edp_bl_level_to_nits(uint32_t level, uint32_t min_nits, uint32_t max_nits,
-                                            uint32_t floor, uint32_t max)
+/* A level's luminance under the same model (levels above max count as max). */
+static inline uint64_t edp_bl_level_to_nits(uint32_t level, uint32_t max_nits, uint32_t max)
 {
-    uint64_t lo = (uint64_t)min_nits << 16, hi = (uint64_t)max_nits << 16;
-    if (hi <= lo || max <= floor || level <= floor) return lo;
-    if (level >= max) return hi;
-    return lo + ((uint64_t)(level - floor) * (hi - lo) + (max - floor) / 2) / (max - floor);
+    if (!max) return 0;
+    if (level > max) level = max;
+    return ((uint64_t)level * ((uint64_t)max_nits << 16) + max / 2) / max;
 }
-/* IODisplayParameters "brightness" (0..EDP_BL_SLIDER_MAX) as nits, linear between the nominal ends. */
-static inline uint64_t edp_bl_slider_to_nits(uint64_t slider, uint32_t min_nits, uint32_t max_nits)
+/* The darkest luminance the kext offers CoreBrightness (BrightnessMilliNits "min"): the configured minimum, raised to
+ * the floor's luminance, since nothing below the floor can be shown. */
+static inline uint64_t edp_bl_min_nits_q16(uint32_t min_nits, uint32_t max_nits, uint32_t floor, uint32_t max)
 {
-    uint64_t lo = (uint64_t)min_nits << 16, hi = (uint64_t)max_nits << 16;
+    uint64_t at_floor = edp_bl_level_to_nits(floor, max_nits, max), configured = (uint64_t)min_nits << 16;
+    return configured > at_floor ? configured : at_floor;
+}
+/* IODisplayParameters "brightness" (0..EDP_BL_SLIDER_MAX) as nits, linear between lo and hi (16.16), and back. */
+static inline uint64_t edp_bl_slider_to_nits(uint64_t slider, uint64_t lo_q16, uint64_t hi_q16)
+{
     if (slider > EDP_BL_SLIDER_MAX) slider = EDP_BL_SLIDER_MAX;
-    return hi <= lo ? lo : lo + ((hi - lo) * slider + EDP_BL_SLIDER_MAX / 2) / EDP_BL_SLIDER_MAX;
+    return hi_q16 <= lo_q16 ? lo_q16 : lo_q16 + ((hi_q16 - lo_q16) * slider + EDP_BL_SLIDER_MAX / 2) / EDP_BL_SLIDER_MAX;
 }
-static inline uint32_t edp_bl_nits_to_slider(uint64_t nits_q16, uint32_t min_nits, uint32_t max_nits)
+static inline uint32_t edp_bl_nits_to_slider(uint64_t nits_q16, uint64_t lo_q16, uint64_t hi_q16)
 {
-    uint64_t lo = (uint64_t)min_nits << 16, hi = (uint64_t)max_nits << 16;
-    if (hi <= lo || nits_q16 <= lo) return 0;
-    if (nits_q16 >= hi) return EDP_BL_SLIDER_MAX;
-    return (uint32_t)(((nits_q16 - lo) * EDP_BL_SLIDER_MAX + (hi - lo) / 2) / (hi - lo));
+    if (hi_q16 <= lo_q16 || nits_q16 <= lo_q16) return 0;
+    if (nits_q16 >= hi_q16) return EDP_BL_SLIDER_MAX;
+    return (uint32_t)(((nits_q16 - lo_q16) * EDP_BL_SLIDER_MAX + (hi_q16 - lo_q16) / 2) / (hi_q16 - lo_q16));
 }
 
 /* ---- Allow-lists: every MMIO access and every DPCD transaction the monitor makes passes one of these ----------- */

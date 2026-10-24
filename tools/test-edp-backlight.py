@@ -8,8 +8,8 @@ opt-in wiring, and (on request) the default-build identity of the monitor and th
     python3 tools/test-edp-backlight.py --kext-reference DIR             # + kext: default sections == DIR's
 
 Model: tools/test-edp-backlight.c runs compat/edp-backlight.{h,c} against a model of the eDP controller's AUX FIFO and a
-DPCD panel and must PASS (ASan/UBSan). Each MUTATIONS entry weakens one safety property in a copy of the engine; the
-same program must FAIL on every one.
+DPCD panel, and checks the kext's nits -> level curve, and must PASS (ASan/UBSan). Each MUTATIONS entry weakens one
+safety property or bends the curve in a copy of the engine; the same program must FAIL on every one.
 
 Wiring: probes/xnuboot.c defaults SNAP_EDP_BACKLIGHT to 0 and every monitor use sits under it; compat/edp-backlight.c is
 linked only through probes/run.py OPTIONAL; the call number and event number are unique; the kext's backlight code sits
@@ -45,7 +45,15 @@ _ap.add_argument('--out')
 ARGS, REST = _ap.parse_known_args() if __name__ == '__main__' else (_ap.parse_args([]), [])
 ENGINE = ('compat/edp-backlight.h', 'compat/edp-backlight.c', 'compat/dpu-intf.h')
 MUTATIONS = (
-    ('no floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       100u', '#define EDP_BL_FLOOR_PERMILLE       0u'),
+    ('no floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       20u', '#define EDP_BL_FLOOR_PERMILLE       0u'),
+    ('bright floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       20u',
+     '#define EDP_BL_FLOOR_PERMILLE       100u'),
+    ('affine curve', 'compat/edp-backlight.h', 'return edp_bl_clamp((nits_q16 * max + full / 2) / full, floor, max);',
+     'return floor + (uint32_t)((nits_q16 * (max - floor) + full / 2) / full);'),
+    ('top short of max', 'compat/edp-backlight.h', 'if (nits_q16 >= full) return max;',
+     'if (nits_q16 >= full) return max - 1;'),
+    ('minimum below the floor', 'compat/edp-backlight.h', 'return configured > at_floor ? configured : at_floor;',
+     'return configured + 0 * at_floor;'),
     ('no clamp', 'compat/edp-backlight.c', 'uint32_t level = edp_bl_clamp(request, s->floor, s->max);',
      'uint32_t level = (uint32_t)request;'),
     ('mask bits dropped', 'compat/edp-backlight.c', ' << 1 | (status & EDP_INTR_MASK_BITS));', ' << 1);'),
