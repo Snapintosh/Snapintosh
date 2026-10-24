@@ -1793,6 +1793,8 @@ def a16gpu(ws, device, out, arguments, environment):
     """One a16gpu.py client; its record must not exist and must end unstopped."""
     log = out.with_suffix('.log')
     need(not out.exists() and not log.exists(), f'{out.name} already exists')
+    # q1n1's build/ is untracked, so a fresh checkout has no build/a16-gpu/ yet.
+    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open('x') as stream:
         result = subprocess.run([sys.executable, 'tools/a16gpu.py', '--device', device, '--out', str(out), *arguments],
                                 cwd=ws.q, env=environment, stdout=stream, stderr=subprocess.STDOUT)
