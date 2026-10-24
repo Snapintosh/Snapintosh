@@ -1158,6 +1158,8 @@ def boot_addition(args):
     extra = []
     if getattr(args, 'present_maint', False):
         extra.append('adreno_present_maint=1')
+    if getattr(args, 'adreno_cs_samplers', False):
+        extra.append('adreno_cs_samplers=1')      # read only by an ADRENO_IB_CS_SAMPLERS AdrenoX2 (configureDevice)
     if getattr(args, 'gpu_coherent', False):
         extra.append('adreno_coherent=1')   # the kext still skips only after the monitor's self-test said ON
     if getattr(args, 'gpu_coherent_force', False):

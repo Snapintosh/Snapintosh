@@ -491,6 +491,12 @@ def parse(argv=None):
                    help='guest boot-arg adreno_present_maint=1: AdrenoDisplay keeps its layer-0 clean+invalidate pass '
                         'even while the beam is LOCKED (tear-free fix2 skips it then); for b12v8\'s stale bands; '
                         'give it to every mode of the attempt')
+    p.add_argument('--adreno-cs-samplers', action='store_true',
+                   help='guest boot-arg adreno_cs_samplers=1: an AdrenoX2 built with ADRENO_IB_CS_SAMPLERS (the desktop '
+                        'profiles since agents/settings-icons; others ignore it) lets the IB validator admit CS sampler '
+                        'loads of up to 8 units and publishes AdrenoIBComputeSamplers, so an ADRENO_SETTINGS_ICONS '
+                        'plug-in encodes CoreImage\'s multi-input kernels (folder, document and Safari icons in System '
+                        'Settings panes); give it to every mode of the attempt')
     p.add_argument('--spmi-scratch', action='store_true',
                    help='SNAP_SPMI_SCRATCH: the emulated SPMI controller also serves the PMU scratch-pad registers '
                         '(f700-f7ff, 8f80-8fff) from RAM, so AppleDialogSPMIPMU::_readRegs stops failing with e00002bc '

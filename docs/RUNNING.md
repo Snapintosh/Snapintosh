@@ -142,7 +142,7 @@ The flags fall into these groups:
 | Console and early stop | `--console`, `--single-user`, `--early-stop-delay`, `--let-panic`, `--panic-serve` |
 | Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us` |
 | Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline` |
-| GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--gpu-x290-survey` |
+| GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--adreno-cs-samplers`, `--gpu-x290-survey` |
 | Panel brightness | `--edp-backlight`, `--edp-backlight-mode` |
 | Clocks and bandwidth | `--thermal-guard`, `--gpu-dvfs`, `--gpu-dvfs-ceiling`, `--cpu-dvfs`, `--ddr-vote`, `--llcc`, `--bw-probe` |
 | Storage | `--nvme-async`, `--nvme-converted` |
@@ -229,8 +229,9 @@ installed and only continues the boot).
 
 The kext side of the icons inside System Settings panes, `ADRENO_IB_CS_SAMPLERS`
 in the desktop AdrenoX2 profiles, is off unless the guest boots with
-`adreno_cs_samplers=1`. `tools/cycle.py` has no option that adds that boot-arg
-yet.
+`adreno_cs_samplers=1`, which `tools/cycle.py installed-fresh --adreno-cs-samplers`
+adds (`tools/test-adreno-cs-samplers.py`). An AdrenoX2 built without the define
+ignores the boot-arg.
 
 ## Exit codes
 
