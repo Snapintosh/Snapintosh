@@ -69,6 +69,9 @@
 #if ADRENO_RESIDENT_REPIN
 #include "adreno-resource-tail.h"
 #endif
+#if ADRENO_RESIDENT_HEAD_OFFSET && !ADRENO_RESIDENT_REPIN
+#error "ADRENO_RESIDENT_HEAD_OFFSET needs ADRENO_RESIDENT_REPIN, as in the kext"
+#endif
 #if !defined(RESOURCE_BASE) && !ADRENO_RESOURCE_POOL
 #error "build with -DADRENO_RESOURCE_POOL=1 (both translation units), or -DRESOURCE_BASE against the base core"
 #endif
@@ -99,6 +102,7 @@ struct desc {
     int live;
     unsigned refs, npages, dir, ro_other, wires_ro, wires_rw, our_pins, native;
     uint64_t logical;
+    uint64_t head;                     /* display-modeset: the first byte's offset in pages[0] (a page-unaligned client) */
     uint32_t *pages;
 };
 struct mem { int live, desc, wired, fb; unsigned prep, idle, nmaps; int maps[3];
@@ -110,6 +114,7 @@ struct map {
     int native;                        /* map+0x10 bit 0: CB0 range held */
     int refuse_pin, refusal;           /* resident-evict: this map's pins fail; the kext's fRefusal */
     uint64_t tail;                     /* resident-evict: the kext's fBackingBytes */
+    uint64_t head;                     /* display-modeset: the kext's fBackingHead */
     uint64_t native_addr, native_len;
 };
 struct counts {
@@ -144,6 +149,8 @@ static struct {
     /* faults: insert number (1-based) and how many of its pages install first; one-shot others */
     unsigned fault_insert_at, fault_insert_partial, fault_clear, fault_unpin, fault_free, fault_pin;
     unsigned window_pages;             /* the IODART allocator's pages from the window base (0: all of it) */
+    int head_off;                      /* display-modeset: boot-arg adreno_head_offset=0 */
+    uint64_t head_admitted, head_refused;
 #if ADRENO_VA_RECLAIM
     struct adreno_va_filler filler;
     int use_filler, pool_locked;
@@ -193,19 +200,37 @@ static void free_pages(struct desc *d)
 {
     for (unsigned i = 0; i < d->npages; i++) { CHECK(M.page_owner[d->pages[i]] == d - M.descs); M.page_owner[d->pages[i]] = -1; }
 }
-static int new_desc(uint64_t logical, unsigned dir)
+/* A descriptor of `logical` bytes whose first byte is `head` bytes into its first page (0: page-aligned). */
+static int new_desc_at(uint64_t logical, unsigned dir, uint64_t head)
 {
-    CHECK(M.ndescs < MAX_DESCS);
+    CHECK(M.ndescs < MAX_DESCS && head < PAGE);
     int id = M.ndescs++;
     struct desc *d = &M.descs[id];
     memset(d, 0, sizeof(*d));
-    d->live = 1; d->logical = logical; d->dir = dir;
-    d->npages = (unsigned)((logical + PAGE - 1) / PAGE);
+    d->live = 1; d->logical = logical; d->dir = dir; d->head = head;
+    d->npages = (unsigned)((head + logical + PAGE - 1) / PAGE);
     d->pages = calloc(d->npages, sizeof(*d->pages));
     CHECK(d->pages);
     alloc_pages(d, id);
     return id;
 }
+static int new_desc(uint64_t logical, unsigned dir) { return new_desc_at(logical, dir, 0); }
+#if ADRENO_RESIDENT_HEAD_OFFSET
+/* IOMemoryDescriptor::getPhysicalSegment(at): the physical address of descriptor byte `at` and the bytes physically
+ * contiguous from it, up to the descriptor's end. */
+static uint64_t segment(const struct desc *d, uint64_t at, uint64_t *length)
+{
+    CHECK(at < d->logical);
+    const uint64_t p = d->head + at;
+    unsigned i = (unsigned)(p / PAGE), run = 1;
+    CHECK(i < d->npages);
+    while (i + run < d->npages && d->pages[i + run] == d->pages[i] + run) run++;
+    uint64_t bytes = (uint64_t)(i + run) * PAGE - p;
+    if (bytes > d->logical - at) bytes = d->logical - at;
+    *length = bytes;
+    return pa_of(d->pages[i]) + p % PAGE;
+}
+#endif
 static int wired(const struct desc *d) { return d->our_pins || d->native || d->wires_ro || d->wires_rw || d->ro_other; }
 static void put_desc(int id)
 {
@@ -370,7 +395,12 @@ static int cb_pin(void *ctx)
     if (id < 0) return -1;
     struct desc *d = &M.descs[id];
     if (m->refuse_pin) return -1;
-#if ADRENO_RESIDENT_REPIN
+#if ADRENO_RESIDENT_HEAD_OFFSET
+    /* the kext's pinBacking: the head is read from the wired descriptor's first segment */
+    const int tail = d->logical < m->r.logical_length && adreno_tail_admit(d->logical, m->r.logical_length);
+    const int headed = d->logical < m->r.logical_length && !M.head_off && adreno_head_fit(d->logical, m->r.logical_length);
+    if (d->logical < m->r.logical_length && !tail && !headed) return -1;
+#elif ADRENO_RESIDENT_REPIN
     const int tail = d->logical < m->r.logical_length && adreno_tail_admit(d->logical, m->r.logical_length);
     if (d->logical < m->r.logical_length && !tail) return -1;
 #else
@@ -382,9 +412,21 @@ static int cb_pin(void *ctx)
         dir = DIR_OUT;
         if (prepare(d, dir)) return -1;
     }
+#if ADRENO_RESIDENT_HEAD_OFFSET
+    uint64_t head = 0;
+    if (headed) {
+        uint64_t span = 0;
+        head = segment(d, 0, &span) & (PAGE - 1);
+        if (!adreno_head_admit(head, d->logical, m->r.logical_length)) { complete(d, dir); M.head_refused++; return -1; }
+        if (head) M.head_admitted++;
+    }
+#endif
     d->refs++; d->our_pins++;
     m->backing = id; m->backing_dir = dir;
-#if ADRENO_RESIDENT_REPIN
+#if ADRENO_RESIDENT_HEAD_OFFSET
+    m->tail = tail || headed ? d->logical : 0;
+    m->head = head;
+#elif ADRENO_RESIDENT_REPIN
     m->tail = tail ? d->logical : 0;
 #endif
     M.c.pins++;
@@ -402,7 +444,7 @@ static int cb_unpin(void *ctx)
     complete(d, m->backing_dir);
     CHECK(d->our_pins); d->our_pins--;
     int id = m->backing;
-    m->backing = -1; m->tail = 0;
+    m->backing = -1; m->tail = 0; m->head = 0;
     put_desc(id);
     M.c.unpins++;
     return 0;
@@ -413,6 +455,13 @@ static uint64_t cb_physical(void *ctx, uint64_t offset, uint64_t *length)
     CHECK(m->backing >= 0);                               /* only while prepared */
     struct desc *d = &M.descs[m->backing];
     CHECK(!(offset % PAGE) && offset < (uint64_t)d->npages * PAGE);
+#if ADRENO_RESIDENT_HEAD_OFFSET
+    if (m->head) {                                        /* the kext's physicalPage, head rule */
+        uint64_t span = 0;
+        const uint64_t pa = segment(d, adreno_head_descriptor_offset(offset, m->head), &span);
+        return adreno_head_run(offset, m->head, m->tail, pa, span, length);
+    }
+#endif
     unsigned i = (unsigned)(offset / PAGE), run = 1;
     while (i + run < d->npages && d->pages[i + run] == d->pages[i] + run) run++;
     uint64_t bytes = (uint64_t)run * PAGE;
@@ -865,7 +914,7 @@ static void replace_backing(struct mem *me)
 {
     if (!me->live || me->wired || me->prep) return;
     const struct desc *old = &M.descs[me->desc];
-    int fresh = new_desc(old->logical, old->dir);
+    int fresh = new_desc_at(old->logical, old->dir, old->head);   /* the client's address keeps its page offset */
     M.descs[fresh].refs = 1;
     int previous = me->desc;
     me->desc = fresh;
@@ -1841,6 +1890,20 @@ static int tail_mem(uint64_t bytes)
     new_map(id);
     return id;
 }
+/* display-modeset: a client buffer of `bytes` at a page-unaligned address: its first byte `head` bytes into its first
+ * page, IOGPU's memory (and map) length round_page(page offset + length). */
+static int head_mem(uint64_t bytes, uint64_t head)
+{
+    CHECK(M.nmems < MAX_MEMS);
+    int id = M.nmems++;
+    struct mem *me = &M.mems[id];
+    memset(me, 0, sizeof(*me));
+    me->live = 1; me->maplen = (head + bytes + PAGE - 1) & ~(PAGE - 1);
+    me->desc = new_desc_at(bytes, DIR_INOUT, head);
+    M.descs[me->desc].refs = 1;
+    new_map(id);
+    return id;
+}
 #if ADRENO_RESIDENT_REPIN
 struct cache_call { uint64_t va, bytes; unsigned direction; };
 static struct cache_call calls[8];
@@ -1946,6 +2009,144 @@ static void repin_scenarios(void)
 #endif
       check_all(1);
       free_mem(s); check_all(1); }
+    /* 33. org2 and b12v23: WindowServer's 16 KiB buffer at a page-unaligned address under IOGPU's 32 KiB map. Without the
+     *     head rule every wire reports it committed (clean refusal, E_PIN) and every submission that lists it is refused,
+     *     round after round, as the -115 lines of both runs; with it the pin is admitted, the map's two pages are the
+     *     descriptor's two pages, every client byte the GPU reaches through the head-moved offset is the CPU's byte, the
+     *     cache passes touch only the descriptor's lines, and it survives unwire, eviction and a replaced descriptor. */
+    {   static const uint64_t heads[] = {0x10, 0x40, 0x200, 0x1000, 0x2a0c, 0x3fc0, 0x3ff0};
+        const uint64_t bytes = 0x4000;
+        for (unsigned h = 0; h < sizeof heads / sizeof heads[0]; h++) {
+            const uint64_t head = heads[h];
+            reset(2, RUNS, 512ULL << 20, 33 + h);
+            int t = head_mem(bytes, head);
+            struct mem *me = &M.mems[t];
+            CHECK(map_of(t)->r.logical_length == 2 * PAGE && M.descs[me->desc].npages == 2);
+            int list[1] = {t}, writes[1] = {1};
+            for (int round = 0; round < 3; round++) {
+#if ADRENO_RESIDENT_HEAD_OFFSET
+                CHECK(submit(list, writes, 1));
+                const struct map *m = map_of(t);
+                CHECK(admitted(m) && m->head == head && m->tail == bytes && m->r.mapped_length == 2 * PAGE);
+                me->prep++; check_gpu_view(m, 1);
+                for (uint64_t k = 0; k < bytes; k += (k < 256 || k > bytes - 256) ? 1 : 61) {
+                    uint64_t at = 0;
+                    CHECK(adreno_head_range(m->head, m->tail, k, 1, &at) && at == head + k);   /* resolveRange */
+                    const uint64_t va = m->r.address + at, leaf = M.leaves[leaf_index(va & ~(PAGE - 1))];
+                    const struct desc *d = &M.descs[me->desc];
+                    CHECK((leaf & 1) && (leaf & ~(NO_WRITE | 1ULL)) + va % PAGE ==
+                          pa_of(d->pages[(head + k) / PAGE]) + (head + k) % PAGE);           /* GPU byte == CPU byte */
+                }
+                uint64_t at = 0;
+                CHECK(adreno_head_range(head, bytes, bytes - 4, 4, &at) && at == head + bytes - 4);
+                CHECK(!adreno_head_range(head, bytes, bytes, 4, &at) && !adreno_head_range(head, bytes, bytes - 4, 8, &at) &&
+                      !adreno_head_range(head, bytes, 0, bytes + 1, &at) && !adreno_head_range(head, bytes, 0, 0, &at));
+                for (unsigned dir = ADRENO_CACHE_TO_DEVICE; dir <= ADRENO_CACHE_FROM_DEVICE; dir++) {
+                    ncalls = 0;
+                    CHECK(!adreno_head_cache(&m->r, m->head, m->tail, dir, 0, m->r.logical_length, record_cache, NULL));
+                    const uint64_t first = m->r.address + (head & ~63ULL), end = m->r.address + ((head + bytes + 63) & ~63ULL);
+                    CHECK(ncalls && calls[0].va == first && calls[ncalls - 1].va + calls[ncalls - 1].bytes == end);
+                    for (unsigned i = 1; i < ncalls; i++) CHECK(calls[i].va == calls[i - 1].va + calls[i - 1].bytes);
+                    for (unsigned i = 0; i < ncalls; i++) {
+                        const uint64_t a = calls[i].va - m->r.address, b = a + calls[i].bytes;
+                        /* invalidate only lines wholly the descriptor's; partial lines are cleaned and invalidated */
+                        if (calls[i].direction == ADRENO_CACHE_FROM_DEVICE) CHECK(a >= head && b <= head + bytes);
+                        else CHECK(calls[i].direction == ADRENO_CACHE_TO_DEVICE);
+                    }
+                    if (dir == ADRENO_CACHE_FROM_DEVICE)
+                        CHECK(ncalls == 1u + !!(head & 63) + !!((head + bytes) & 63) &&
+                              calls[!!(head & 63)].direction == ADRENO_CACHE_FROM_DEVICE);
+                    else CHECK(ncalls == 1 && calls[0].direction == ADRENO_CACHE_TO_DEVICE);
+                }
+                me->prep--;
+                check_all(1);
+                if (round == 0) native_unwire(me);                                      /* resident */
+                if (round == 1) { native_unwire(me); replace_backing(me); }             /* stale: evicted, re-pinned */
+                if (round == 2) { M.res.budget = 0; native_unwire(me); }                /* released: re-pinned at free */
+#elif ADRENO_RESIDENT_REPIN
+                const uint64_t pins = M.c.pins;
+                CHECK(!submit(list, writes, 1) && me->wired);           /* the memory wires; the map stays unadmitted */
+                CHECK(!admitted(map_of(t)) && map_of(t)->refusal == ADRENO_RESOURCE_E_PIN && M.c.pins == pins);
+                check_all(1);
+                native_unwire(me);
+#else
+                CHECK(!submit(list, writes, 1) && !me->wired && !admitted(map_of(t)));
+                check_all(1);
+#endif
+            }
+#if ADRENO_RESIDENT_HEAD_OFFSET
+            if (!(M.res.evicted == 1 && M.head_admitted == 2 && !M.head_refused))
+                fatal(__LINE__, "head %llx: evicted %llu admitted %llu refused %llu", (unsigned long long)head,
+                      (unsigned long long)M.res.evicted, (unsigned long long)M.head_admitted, (unsigned long long)M.head_refused);
+#endif
+            free_mem(t); check_all(1);
+        }
+    }
+#if ADRENO_RESIDENT_HEAD_OFFSET
+    /* 34. What the head rule still refuses, and its head-0 equivalence to the tail rule. A map a page longer than the
+     *     pages the descriptor touches, a map too short for head + bytes, and boot-arg adreno_head_offset=0 are refused
+     *     cleanly (nothing pinned, wired once and completed); every submission of them stays refused. */
+    reset(2, RUNS, 512ULL << 20, 40);
+    {   const uint64_t bytes = 0x4000, head = 0x1000;
+        int longer = head_mem(bytes, head), shorter = head_mem(bytes + 0x3000, 0x1100);
+        M.mems[longer].maplen = 0;                                /* the model's map length is fixed at creation: */
+        CHECK(map_of(longer)->r.logical_length == 2 * PAGE);
+        struct map *lm = map_of(longer);
+        /* stretch the refused map by one page the way a wrong IOGPU length would: refuse, never map past the pages */
+        lm->r.logical_length = 3 * PAGE;
+        int a[1] = {longer}, w[1] = {0};
+        CHECK(!submit(a, w, 1) && !admitted(lm) && lm->refusal == ADRENO_RESOURCE_E_PIN && lm->backing < 0);
+        lm->r.logical_length = 2 * PAGE;                          /* restored: admitted */
+        CHECK(submit(a, w, 1) && admitted(lm) && lm->head == head);
+        struct map *sm = map_of(shorter);
+        sm->r.logical_length = 2 * PAGE;                          /* 0x1100 + 0x7000 needs 3 pages */
+        int b[1] = {shorter};
+        CHECK(!submit(b, w, 1) && !admitted(sm) && sm->backing < 0);
+        sm->r.logical_length = 3 * PAGE;
+        CHECK(submit(b, w, 1) && admitted(sm));
+        check_all(1);
+        native_unwire(&M.mems[longer]); native_unwire(&M.mems[shorter]);
+        free_mem(longer); free_mem(shorter); check_all(1);
+        M.head_off = 1;                                           /* boot-arg adreno_head_offset=0 */
+        int off = head_mem(bytes, head), c[1] = {off};
+        CHECK(!submit(c, w, 1) && !admitted(map_of(off)) && map_of(off)->refusal == ADRENO_RESOURCE_E_PIN);
+        native_unwire(&M.mems[off]); free_mem(off); check_all(1);
+        M.head_off = 0;
+        CHECK(M.head_refused == 2); }
+    /* head 0: admission, runs and cache plans are the tail rule's, over every byte count of a few pages. */
+    for (uint64_t bytes = 1; bytes <= 3 * PAGE; bytes += bytes < 300 ? 1 : 251)
+        for (uint64_t logical = PAGE; logical <= 5 * PAGE; logical += PAGE) {
+            CHECK(adreno_head_admit(0, bytes, logical) == adreno_tail_admit(bytes, logical));
+            if (!adreno_tail_admit(bytes, logical)) continue;
+            for (uint64_t off = 0; off < logical; off += PAGE) {
+                if (off >= bytes) continue;
+                const uint64_t span = bytes - off < 2 * PAGE ? bytes - off : 2 * PAGE;
+                uint64_t len = 0;
+                CHECK(adreno_head_run(off, 0, bytes, PA_BASE + off, span, &len) == PA_BASE + off &&
+                      len == adreno_tail_span(off, span, bytes));
+            }
+            for (unsigned dir = 0; dir <= ADRENO_CACHE_FROM_DEVICE; dir++)
+                for (uint64_t o = 0; o < logical; o += 64 * 37)
+                    for (uint64_t l = 64; o + l <= logical; l += 64 * 53) {
+                        struct adreno_tail_range t[2], h[3];
+                        const unsigned nt = adreno_tail_cache_plan(o, l, bytes, dir, t);
+                        const unsigned nh = adreno_head_cache_plan(o, l, 0, bytes, dir, h);
+                        CHECK(nt == nh);
+                        for (unsigned i = 0; i < nt; i++)
+                            CHECK(t[i].offset == h[i].offset && t[i].bytes == h[i].bytes && t[i].direction == h[i].direction);
+                    }
+        }
+    /* A segment that does not sit where the head says is refused page by page (the core then unwinds). */
+    {   uint64_t len = 1;
+        CHECK(!adreno_head_run(0, 0x200, 0x4000, PA_BASE + 0x300, 0x3d00, &len) && !len);       /* not the head */
+        CHECK(!adreno_head_run(PAGE, 0x200, 0x4000, PA_BASE + 0x10, 0x210, &len) && !len);     /* unaligned page */
+        CHECK(adreno_head_run(0, 0x200, 0x4000, PA_BASE + 0x200, 0x3e00, &len) == PA_BASE && len == PAGE);
+        CHECK(adreno_head_run(PAGE, 0x200, 0x4000, PA_BASE + 7 * PAGE, 0x200, &len) == PA_BASE + 7 * PAGE &&
+              len == PAGE);                                                                  /* the last page, whole */
+        CHECK(!adreno_head_admit(0x200, 0x4000, 3 * PAGE) && !adreno_head_admit(0x200, 0x4000, PAGE) &&
+              adreno_head_admit(0x200, 0x4000, 2 * PAGE) && !adreno_head_admit(PAGE, 0x4000, 2 * PAGE)); }
+    printf("PASS head\n");
+#endif
     printf("PASS repin\n");
 }
 #endif
