@@ -222,8 +222,17 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_SHA = 'a2674b9e4ff8107dbe352a4acf
 # Boot with --present-latch --present-pipeline 1 --ib-async --gpu-recover soft. Rollback: latch2-sync-nosparse
 # f930bc2154ebea37b7c19be785ee4dafe7c1a360f20cd78541e67d4a54c51968 (b12v12/b12v13/b12v16, no pipeline).
 INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH = ('build/current-assets/auxkc-input-ptp-dartpool-resident-beam-va-wide-'
-                                                        'latch2-pipe2-recover-nosparse-20261021/adreno-input.kc')
-INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = '2cb7b6cca7fd199a9c254cda4022310630593a37e68c1b1a22006720ca3cd444'
+                                                        'latch2-pipe2-recover-relatch-sparse-repin-cursor-'
+                                                        'coherent-v3-20261023/adreno-input.kc')
+INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'bd057773a8524ddbd0d0ab1148263257728e1ddf5e06a189dc18d1ff33c47893'
+# b12v23 (2026-10-23): + IO-coherent maintenance skipping (AdrenoX2 c66edb6b = SnapAdreno PROFILE=desktop at its profiles
+# commit; SnapI2CHID d90e0199 = PROFILE=desktop); boot with --gpu-coherent. Previous: cursor 43bed810 (AdrenoX2
+# 981e0b88 = PROFILE=desktop-nocoherent), b12v19c-b12v20. tools/build-auxkc-desktop.sh NAME rebuilds a collection from
+# this checkout and prints the two lines to put here (its bytes differ from these: see the script).
+# b12v19c: + aligned live-scanout copies (agents/cursor-fix; b12v19r panicked on the shake-to-locate cursor). Previous: repin 2ec76b70...
+# b12v19r: + resident re-pin kext b2686dfb (agents/resident-evict). Previous: relatch-sparse 1cd18fa5...
+# b12v19: relatch + cache-sparse kext 2cd7ef66 (agents/b12v19-kext). Rollback b12v18: relatch-nosparse 65243492...
+# b12v18: relatch kext 128667ac (agents/present-pacing). Rollback: latch2-pipe2-recover-nosparse, 2cb7b6cc...
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
