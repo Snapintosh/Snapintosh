@@ -6,9 +6,10 @@
     "path": "Snapintosh/tools/run-sks-transport-candidate.py",
     "sha256": "52fe215a9a4779ebc50f01ecaafb4a4210d2b506b09e6ee10a5fbb089a5cc6b8"
   },
+  "stages_source": "q1n1-stage.bin and q1n1-stage-alt.bin as `make uefi` builds them in the Snapintosh q1n1 repository at 7872398 (branch migrate-private): the same bytes as the integration tree's q1n1 build, whose q1n1-stage.bin the b12v23 desktop run recorded (stage_bin_sha256). Rebuild q1n1 and pin your own pair if yours differ.",
   "stages": {
-    "q1n1/build/uefi/q1n1-stage.bin": "752b4ab711fcab5f7a4d4fc1b71dc70ae93ff98efd3212c15d918d2c1e279ea4",
-    "q1n1/build/uefi/q1n1-stage-alt.bin": "e6276e5a032f97ee0f8f087f5f301da25e709f8b8deca2167eb1d4a4ce9c3c03"
+    "q1n1/build/uefi/q1n1-stage.bin": "56f575104d1dda373c9be8787ee3c5fac304a30eda6e5bd1aae543bcda21c55c",
+    "q1n1/build/uefi/q1n1-stage-alt.bin": "5d6f7df09a83c0a865e88d29fe77f323070e3b91ffa295ca69232684fbb67936"
   },
   "image_bases": [
     "0xb0000000",
