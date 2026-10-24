@@ -459,6 +459,8 @@ def decode(ws, dest, record):
             token_costs=exits.get('token_costs'), fast_ipi=(exits.get('fast_ipi') or {}).get('summary'))
         if exits.get('token_trim'):
             summary['token_trim'] = exits['token_trim']   # SNAP_TOKEN_TRIM runs only
+        if exits.get('view_reclaim'):
+            summary['view_reclaim'] = exits['view_reclaim']   # SNAP_VIEW_RECLAIM runs only
     write(dest / 'decoded.json', dict(cpus=cpus, perf=counters, host_hz=hz, exits=exits))
     write(dest / 'summary.json', summary)
     return summary

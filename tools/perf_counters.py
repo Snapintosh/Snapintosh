@@ -792,10 +792,42 @@ def decode_ib_async(record, hz=None, recover=False):
     return out
 
 
+# SNAP_VIEW_RECLAIM (shadow/sprr-view.h; probes/xnuboot.c OUT_VIEW_RECLAIM): the kernel views' pool -- tables in use,
+# the highest count, reclaims that retired tables and how many, refusals that found nothing to retire, the capacity --
+# behind "VIEWRCL1" and a word of value bytes << 32, at a fixed place: the 8 words just below the IB async slot
+# (used or not).
+VIEW_RECLAIM_MAGIC = 0x314c435257454956   # "VIEWRCL1"
+VIEW_RECLAIM_DEFINE = '-DSNAP_VIEW_RECLAIM=1'
+VIEW_RECLAIM_FIELDS = ('count', 'high_water', 'reclaims', 'retired', 'full', 'capacity')
+
+
+def view_reclaim_spec():
+    """(byte offset in report.bin, byte length) of the view reclaim record."""
+    offset, _ = ib_async_spec()
+    size = 8 * (2 + len(VIEW_RECLAIM_FIELDS))
+    return offset - size, size
+
+
+def decode_view_reclaim(record):
+    n = len(VIEW_RECLAIM_FIELDS)
+    if len(record) != 8 * (2 + n):
+        raise ValueError(f'expected {8 * (2 + n)} bytes, got {len(record)}')
+    words = struct.unpack(f'<{2 + n}Q', record)
+    if words[0] != VIEW_RECLAIM_MAGIC or words[1] != (8 * n) << 32:
+        raise ValueError('no view reclaim record here (magic or size word differs)')
+    out = dict(zip(VIEW_RECLAIM_FIELDS, words[2:]))
+    # The root is never retired; every reclaim retires at least one table.
+    if not 1 <= out['count'] <= out['high_water'] <= out['capacity'] or out['capacity'] != 256 or \
+            out['retired'] < out['reclaims']:
+        raise ValueError('inconsistent view reclaim counters')
+    out['free'] = out['capacity'] - out['count']
+    return out
+
+
 def decode_report(report, defines, hz=None):
     """report.bin's records for a SNAP_FAST_EL0_SYSREG / SNAP_SERVICE_SUBCLASS monitor: the exit profile,
     then (as its defines have them) the converted-call profile, the token costs, the fast IRQ and fast IPI
-    outcomes, the DART memo and the token-trim record."""
+    outcomes, the DART memo, the token-trim record, the IB flight and the kernel views' pool."""
     offset, size = exit_profile_spec(defines)
     out = decode_exit_profile(report[offset:offset + size], defines, hz=hz)
     if '-DSNAP_FINE_LOCKS=1' in defines:
@@ -822,6 +854,9 @@ def decode_report(report, defines, hz=None):
         offset, size = ib_async_spec()
         out['ib_async'] = decode_ib_async(report[offset:offset + size], hz=hz,
                                           recover=any(d.startswith('-DSNAP_ADRENO_RECOVER=') for d in defines))
+    if VIEW_RECLAIM_DEFINE in defines:
+        offset, size = view_reclaim_spec()
+        out['view_reclaim'] = decode_view_reclaim(report[offset:offset + size])
     return out
 
 

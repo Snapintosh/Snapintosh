@@ -207,7 +207,7 @@ CONSOLE_OFFSET = LOG_OFFSET + LOG_BYTES
 # tools/test-classify.py checks the whole report fits.
 # 464 KiB for probe code since SNAP_VIEW_RECLAIM: the next1 qualification's
 # monitor (--edp-backlight) was 458,552 bytes, 200 short of the previous
-# 448 KiB, and the reclaim adds about 1.4 KiB. This time CODE_AT moves down
+# 448 KiB, and the reclaim adds 1,352 (with VIEWRCL1). CODE_AT moves down
 # 16 KiB instead of OUT_AT up: the report ends exactly where the stopped-probe
 # scratch begins (heap+0x480000, tools/probe-a16-cpus.py), which
 # tools/secondary-runtime.py collect writes after the monitor returns and
@@ -1799,6 +1799,16 @@ def run_xnuboot(proxy, info, code, guest_profile='j700ap-26A428',
     early_record = early_names.decode(proxy.readmem(out + EARLY_STOP_OFFSET, early_names.SIZE))
     for line in early_names.summary(early_record, host.timer_hz):
         print(f'  {line}')
+    if '-DSNAP_VIEW_RECLAIM=1' in FLAGS:
+        perf = runpy.run_path(str(ROOT/'tools/perf_counters.py'))
+        offset, size = perf['view_reclaim_spec']()
+        try:
+            views = perf['decode_view_reclaim'](proxy.readmem(out + offset, size))
+            print(f"  kernel views: {views['count']} of {views['capacity']} tables (high water "
+                  f"{views['high_water']}), {views['reclaims']} reclaims retired {views['retired']}, "
+                  f"{views['full']} refused with nothing to retire")
+        except ValueError as error:
+            print('  kernel views record unreadable:', error)
     thermal_record = None
     if early is not None and early.thermal:
         thermal_names = runpy.run_path(str(ROOT/'tools/a16_thermal.py'))

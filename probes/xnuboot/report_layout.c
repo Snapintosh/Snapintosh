@@ -757,3 +757,32 @@ _Static_assert(OUT_IB_ASYNC+2+ADRENO_IB_FLIGHT_WORDS==OUT_TOKEN_TRIM,"the IB asy
 _Static_assert(OUT_IB_ASYNC+2+ADRENO_IB_FLIGHT_WORDS+2+16==OUT_DART_MEMO,"the IB async record's slot");
 #endif
 #endif
+#if SNAP_VIEW_RECLAIM
+/* The kernel views' pool (shadow/sprr-view.h): count and high-water mark, the
+ * reclaims that retired tables and how many, refusals that found nothing to
+ * retire, and the capacity, behind "VIEWRCL1" and a word of value bytes << 32,
+ * at a fixed place just below the IB async slot (used or not); each chained
+ * record must end before it. tools/perf_counters.py decode_view_reclaim. */
+#define VIEW_RECLAIM_WORDS 6u
+#define OUT_VIEW_RECLAIM (OUT_THERMAL - 98 - 3 - 8 - 2 - 16 - 2 - 36 - 2 - VIEW_RECLAIM_WORDS)
+#define VIEW_RECLAIM_MAGIC UINT64_C(0x314c435257454956)   /* "VIEWRCL1" */
+_Static_assert(OUT_EARLY_STOP+EARLY_STOP_STATE_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#if SNAP_FAST_EL0_SYSREG || SNAP_SERVICE_SUBCLASS
+_Static_assert(OUT_EXIT_PROFILE+2+EXIT_PROFILE_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#endif
+#if SNAP_FINE_LOCKS
+_Static_assert(OUT_FINE_PROFILE+2+GUEST_CPU_COUNT*FINE_PROFILE_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#endif
+#if SNAP_TOKEN_COSTS
+_Static_assert(OUT_TOKEN_COSTS+2+TOKEN_COSTS_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#endif
+#if SNAP_FAST_TIMER_IRQ
+_Static_assert(OUT_FAST_IRQ+2+GUEST_CPU_COUNT*FAST_IRQ_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#endif
+#if SNAP_GUEST_NET
+_Static_assert(OUT_GUEST_NET+2+GUEST_NET_LINK_WORDS+GUEST_NET_VIEW_WORDS<=OUT_VIEW_RECLAIM,"view reclaim report overlap");
+#endif
+#if SNAP_ADRENO_IB_ASYNC
+_Static_assert(OUT_VIEW_RECLAIM+2+VIEW_RECLAIM_WORDS==OUT_IB_ASYNC,"the view reclaim record ends at the IB async slot");
+#endif
+#endif
