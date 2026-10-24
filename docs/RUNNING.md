@@ -194,11 +194,13 @@ eDP controller's AUX channel, touching only the AUX transport registers and
 DPCD `0x721`-`0x723`, clamping the level to between 10% of full scale and the
 panel's maximum, and stopping for the boot on any failure with the brightness
 left as it was (`compat/edp-backlight.h`, event `EV_EDP_BACKLIGHT`). The guest
-gets AdrenoX2's `desktop-backlight` profile, whose `AdrenoBacklight` service is
-what CoreBrightness drives, and the boot-arg `adreno_backlight=1`. The AuxKC
-must be built (`KEXT_PROFILE=desktop-backlight tools/build-auxkc-desktop.sh
-NAME`) and pinned as `INPUT_AUXKC_DESKTOP_BACKLIGHT`; until then the flag is
-refused. `--edp-backlight-mode` lets the first change switch a panel left in
+gets the AuxKC pinned as `INPUT_AUXKC_DESKTOP_BACKLIGHT`, whose AdrenoX2 has the
+`AdrenoBacklight` service CoreBrightness drives, and the boot-arg
+`adreno_backlight=1`. The pinned collection, `next-20261024`, is built with
+`KEXT_PROFILE=desktop-next I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh
+NAME` for a monitor without `--gpu-coherent` (`desktop-next` is
+`desktop-nocoherent` plus the service); a `--gpu-coherent` run needs a
+`KEXT_PROFILE=desktop-backlight` collection pinned there instead. `--edp-backlight-mode` lets the first change switch a panel left in
 PWM-pin mode to DPCD control. `tools/survey-edp-aux.py` checks, read-only from
 q1n1, that the clocks and the AUX controller the call needs are on.
 `tools/test-edp-backlight.py` is the offline test.

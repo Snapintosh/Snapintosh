@@ -231,12 +231,17 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'ccf0c8f4da4f63fbe25c
 # b12v19r: + resident re-pin kext b2686dfb (agents/resident-evict). Previous: relatch-sparse 1cd18fa5...
 # b12v19: relatch + cache-sparse kext 2cd7ef66 (agents/b12v19-kext). Rollback b12v18: relatch-nosparse 65243492...
 # b12v18: relatch kext 128667ac (agents/present-pacing). Rollback: latch2-pipe2-recover-nosparse, 2cb7b6cc...
-# --edp-backlight (opt-in, agents/brightness): the --present-latch collection with SnapAdreno PROFILE=desktop-backlight's
-# AdrenoX2 (the desktop profile plus -DADRENO_BACKLIGHT=1 in AdrenoDisplay.o: the AdrenoBacklight service CoreBrightness
-# drives) and SnapI2CHID's desktop profile. None until built (KEXT_PROFILE=desktop-backlight
-# tools/build-auxkc-desktop.sh NAME prints the two lines) and pinned: --edp-backlight refuses meanwhile.
-INPUT_AUXKC_DESKTOP_BACKLIGHT = None
-INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = None
+# --edp-backlight (opt-in, agents/brightness): the --present-latch collection with an AdrenoX2 that carries
+# -DADRENO_BACKLIGHT=1 in AdrenoDisplay.o (the AdrenoBacklight service CoreBrightness drives). Pinned: next-20261024,
+# the org next build (KEXT_PROFILE=desktop-next I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh, umbrella
+# 78920c5, SnapAdreno b5bfcb4, SnapI2CHID f0b7984): AdrenoX2 3202fd6f = desktop-nocoherent (no --gpu-coherent) plus
+# AdrenoBacklight, the head rule (adreno_head_offset), the IOMFB call trace and the CS sampler opt-in
+# (adreno_cs_samplers); SnapI2CHID 4a81f74e = desktop plus the Fn-key layer (snap_i2c_fnkeys). Every addition stays off
+# without its boot-arg except the head rule (adreno_head_offset=0 turns it off). A --gpu-coherent run wants a
+# KEXT_PROFILE=desktop-backlight collection here instead. Without --edp-backlight the latch collection above
+# (org-desktop-nocoherent-20261023, ccf0c8f4) is used, which is also this one's rollback.
+INPUT_AUXKC_DESKTOP_BACKLIGHT = 'build/current-assets/next-20261024/adreno-input.kc'
+INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = '57965a84916986eed68988b174d699eba06050207945af742c6dd57f616cbd82'
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
