@@ -8,13 +8,17 @@ opt-in wiring, and (on request) the default-build identity of the monitor and th
     python3 tools/test-edp-backlight.py --kext-reference DIR             # + kext: default sections == DIR's
 
 Model: tools/test-edp-backlight.c runs compat/edp-backlight.{h,c} against a model of the eDP controller's AUX FIFO and a
-DPCD panel and must PASS (ASan/UBSan). Each MUTATIONS entry weakens one safety property in a copy of the engine; the
-same program must FAIL on every one.
+DPCD panel, and checks the kext's nits -> level curve, and must PASS (ASan/UBSan). Each MUTATIONS entry weakens one
+safety property or bends the curve in a copy of the engine; the same program must FAIL on every one.
 
 Wiring: probes/xnuboot.c defaults SNAP_EDP_BACKLIGHT to 0 and every monitor use sits under it; compat/edp-backlight.c is
 linked only through probes/run.py OPTIONAL; the call number and event number are unique; the kext's backlight code sits
-under ADRENO_BACKLIGHT; installed-fresh appends the define last, adds the boot-args, and refuses until the AuxKC is
-pinned.
+under ADRENO_BACKLIGHT and publishes what BrightnessControl needs to write to it (force-brightness-control), mapping
+every request through the one curve; installed-fresh appends the define last, adds the boot-args, and refuses until the
+AuxKC is pinned.
+
+UserspaceContract (a 26A428 host with ipsw only, else SKIP): the dyld cache's BrightnessControl and IOMobileFramebuffer
+still carry the names that path relies on (gpu/adreno-kext/kext/src/AdrenoBacklight.h).
 
 --build: xnuboot with each --qualification's flags, define absent, =0 and =1: absent == =0 == the qualification's
 monitor_sha256; =1 differs and fits the code budget (probes/run.py OUT_AT - CODE_AT), its headroom printed.
@@ -45,7 +49,15 @@ _ap.add_argument('--out')
 ARGS, REST = _ap.parse_known_args() if __name__ == '__main__' else (_ap.parse_args([]), [])
 ENGINE = ('compat/edp-backlight.h', 'compat/edp-backlight.c', 'compat/dpu-intf.h')
 MUTATIONS = (
-    ('no floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       100u', '#define EDP_BL_FLOOR_PERMILLE       0u'),
+    ('no floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       20u', '#define EDP_BL_FLOOR_PERMILLE       0u'),
+    ('bright floor', 'compat/edp-backlight.h', '#define EDP_BL_FLOOR_PERMILLE       20u',
+     '#define EDP_BL_FLOOR_PERMILLE       100u'),
+    ('affine curve', 'compat/edp-backlight.h', 'return edp_bl_clamp((nits_q16 * max + full / 2) / full, floor, max);',
+     'return floor + (uint32_t)((nits_q16 * (max - floor) + full / 2) / full);'),
+    ('top short of max', 'compat/edp-backlight.h', 'if (nits_q16 >= full) return max;',
+     'if (nits_q16 >= full) return max - 1;'),
+    ('minimum below the floor', 'compat/edp-backlight.h', 'return configured > at_floor ? configured : at_floor;',
+     'return configured + 0 * at_floor;'),
     ('no clamp', 'compat/edp-backlight.c', 'uint32_t level = edp_bl_clamp(request, s->floor, s->max);',
      'uint32_t level = (uint32_t)request;'),
     ('mask bits dropped', 'compat/edp-backlight.c', ' << 1 | (status & EDP_INTR_MASK_BITS));', ' << 1);'),
@@ -162,6 +174,21 @@ class Wiring(unittest.TestCase):
                                     'ADRENO_BACKLIGHT')
         self.assertEqual(bad, [])
 
+    def test_kext_brightness_path(self):
+        # The service carries what WindowServer's BrightnessControl needs to write brightness-nits to it
+        # (gpu/adreno-kext/kext/src/AdrenoBacklight.h, steps 2 and 3), and every request goes through the curve.
+        src = (ROOT / 'gpu/adreno-kext/kext/src/AdrenoDisplay/backlight.cpp').read_text()
+        force = re.search(r'kForceBrightnessControl\[(\d+)\] = \{([^}]*)\}', src)
+        self.assertIsNotNone(force, 'force-brightness-control bytes not found')
+        self.assertNotEqual(int(force.group(2).split(',')[0], 0), 0, 'its first byte must be nonzero')
+        for needle in ('setProperty("force-brightness-control", (void *)kForceBrightnessControl,',
+                       'setProperty("backlight-control", kOSBooleanTrue)', 'd->getObject("brightness-nits")',
+                       'putDict(params, "BrightnessMilliNits", nits)', 'setProperty("IODisplayParameters", params)',
+                       'edp_bl_nits_to_level(nits_q16 < fMinQ16 ? fMinQ16 : nits_q16, fMaxNits, fFloor, fMax)',
+                       'fMinQ16 = edp_bl_min_nits_q16(fMinNits, fMaxNits, fFloor, fMax);'):
+            self.assertIn(needle, src)
+        self.assertEqual(src.count('edp_bl_nits_to_level('), 1, 'one mapping for every source')
+
     def test_cycle(self):
         from cycle_lib import installed_fresh as f
         chain = dict(variant='fast', input=True, input_touchpad=True, input_ptp=True, present_dartpool=True,
@@ -202,6 +229,41 @@ class Wiring(unittest.TestCase):
         self.assertTrue(body.rstrip().endswith('flags.append(EDP_BACKLIGHT_DEFINE)'), 'the define is not appended last')
 
 
+DSC = Path('/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e')
+IPSW = shutil.which('ipsw') or '/opt/homebrew/bin/ipsw'
+# The names the guest's 26A428 userspace must still use for AdrenoBacklight.h's path, per image: BrightnessControl's
+# match key, the keys it reads and writes, and the BrightnessControl entry points IOMobileFramebuffer resolves.
+USERSPACE_NAMES = {
+    'BrightnessControl': ('IOPropertyMatch', 'backlight-control', 'force-brightness-control', 'brightness-nits',
+                          'IODisplayParameters', 'BrightnessMilliNits', 'LmaxProduct'),
+    'IOMobileFramebuffer': ('BCBrtControlNewMonitorForAllDisplaysWithHandler', 'BCBrtControlGetCapabilities',
+                            'BCBrtControlSetNits'),
+}
+
+
+def host_build():
+    try:
+        return subprocess.run(['sw_vers', '-buildVersion'], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return ''
+
+
+@unittest.skipUnless(DSC.exists() and Path(IPSW).exists() and host_build() == '26A428',
+                     'needs a 26A428 host (the guest\'s userspace), its dyld cache and ipsw')
+class UserspaceContract(unittest.TestCase):
+    """The host runs the guest's userspace build; its dyld cache must carry every name the path relies on. A
+    missing name means the 26A428 analysis in AdrenoBacklight.h no longer holds for this build."""
+
+    def test_names_present(self):
+        names = sorted({n for v in USERSPACE_NAMES.values() for n in v})
+        out = subprocess.run([IPSW, 'dsc', 'str', str(DSC), '--no-color', *names], capture_output=True, text=True,
+                             timeout=600)
+        self.assertEqual(out.returncode, 0, out.stderr[-1000:])
+        found = set(re.findall(r'^0x[0-9a-f]+: "([^"]*)"\s+image=(\S+)$', out.stdout, re.M))
+        missing = [(image, n) for image, ns in USERSPACE_NAMES.items() for n in ns if (n, image) not in found]
+        self.assertEqual(missing, [])
+
+
 @unittest.skipUnless(ARGS.build, 'pass --build to compile the monitor (minutes)')
 class Build(unittest.TestCase):
     def test_monitor(self):
@@ -231,7 +293,8 @@ class Kext(unittest.TestCase):
         out = Path(ARGS.out) / 'kext' if ARGS.out else Path(tempfile.mkdtemp(prefix='edp-backlight-kext-'))
         env = dict(os.environ, ZERO_AR_DATE='1')
         kext = ROOT / 'gpu/adreno-kext/kext/build.sh'
-        for profile, dest in (('', out / 'default'), ('desktop-backlight', out / 'desktop-backlight')):
+        profiles = ('desktop-backlight', 'desktop-next')
+        for profile, dest in (('', out / 'default'), *((p, out / p) for p in profiles)):
             e = dict(env, OUT=str(dest), **({'PROFILE': profile} if profile else {}))
             b = subprocess.run(['sh', str(kext)], env=e, capture_output=True, text=True)
             self.assertEqual(b.returncode, 0, b.stdout[-2000:] + b.stderr[-2000:])
@@ -239,10 +302,14 @@ class Kext(unittest.TestCase):
         c = subprocess.run([sys.executable, str(ROOT / 'tools/macho-sections.py'), str(ref),
                             str(out / 'default/AdrenoX2.kext/Contents/MacOS/AdrenoX2')], capture_output=True, text=True)
         self.assertRegex(c.stdout, r'(\d+) of \1 sections identical', c.stdout)
-        nm = subprocess.run(['nm', '-m', str(out / 'desktop-backlight/AdrenoX2.kext/Contents/MacOS/AdrenoX2')],
-                            capture_output=True, text=True).stdout
-        self.assertIn('__ZN13AdrenoDisplay20set_brightness_gatedEi', nm)
-        self.assertIn('__ZN15AdrenoBacklight10gMetaClassE', nm)
+        default = (out / 'default/AdrenoX2.kext/Contents/MacOS/AdrenoX2').read_bytes()
+        self.assertNotIn(b'force-brightness-control', default)
+        for profile in profiles:
+            binary = out / profile / 'AdrenoX2.kext/Contents/MacOS/AdrenoX2'
+            nm = subprocess.run(['nm', '-m', str(binary)], capture_output=True, text=True).stdout
+            self.assertIn('__ZN13AdrenoDisplay20set_brightness_gatedEi', nm, profile)
+            self.assertIn('__ZN15AdrenoBacklight10gMetaClassE', nm, profile)
+            self.assertIn(b'force-brightness-control\0', binary.read_bytes(), profile)
 
 
 if __name__ == '__main__':

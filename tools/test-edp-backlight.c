@@ -187,6 +187,61 @@ static uint32_t level_of(const uint64_t r[4]) { return (uint32_t)r[3]; }
 static uint32_t state_of(const uint64_t r[4]) { return edp_bl_reply_state(r[1]); }
 static uint32_t panel_level(void) { return (uint32_t)M.dpcd[0x722] << 8 | M.dpcd[0x723]; }
 
+/* The kext's nits -> level curve (luminance proportional to level, the top level = max_nits), on the A16's 11-bit
+ * panel with the default 5..500 nits: the bottom of CoreBrightness's range is the floor, the top is the panel's
+ * maximum, and everything between is proportional, so the slider's lower half is genuinely dim. */
+#define Q(n) ((uint64_t)(n) << 16)
+static void test_curve(void)
+{
+    const uint32_t max = 2047, floor = edp_bl_floor_level(max), maxn = EDP_BL_NITS_MAX_DEFAULT;
+    CHECK(floor == 41 && maxn == 500);
+    uint32_t prev = 0;
+    for (uint64_t q = 0; q <= Q(600); q += 1u << 12) {          /* monotonic, inside [floor, max] */
+        uint32_t l = edp_bl_nits_to_level(q, maxn, floor, max);
+        CHECK(l >= floor && l <= max && l >= prev);
+        prev = l;
+    }
+    CHECK(edp_bl_nits_to_level(0, maxn, floor, max) == floor);
+    CHECK(edp_bl_nits_to_level(Q(5), maxn, floor, max) == floor);       /* Windows' minimum is below the floor */
+    CHECK(edp_bl_nits_to_level(Q(10), maxn, floor, max) == floor);      /* the table's low offset is the floor */
+    CHECK(edp_bl_nits_to_level(Q(11), maxn, floor, max) == 45);
+    CHECK(edp_bl_nits_to_level(Q(250), maxn, floor, max) == 1024);      /* half the luminance, half the levels */
+    CHECK(edp_bl_nits_to_level(Q(140), maxn, floor, max) == 573);       /* CoreBrightness's default, 28% */
+    CHECK(edp_bl_nits_to_level(Q(500), maxn, floor, max) == max);
+    CHECK(edp_bl_nits_to_level(Q(500) - 1, maxn, floor, max) == max);
+    CHECK(edp_bl_nits_to_level(Q(1000), maxn, floor, max) == max);
+    CHECK(edp_bl_nits_to_level(UINT64_MAX, maxn, floor, max) == max);
+    CHECK(edp_bl_nits_to_level(Q(100), 0, floor, max) == floor);        /* degenerate: the floor */
+    CHECK(edp_bl_nits_to_level(Q(100), maxn, max, max) == max && edp_bl_nits_to_level(Q(100), maxn, 9, 9) == 9);
+    /* The configured top moves the scale: with 400 nits as full scale, 200 nits is half. */
+    CHECK(edp_bl_nits_to_level(Q(200), 400, floor, max) == 1024 && edp_bl_nits_to_level(Q(400), 400, floor, max) == max);
+    /* Level -> nits is the same line; every level from the floor up survives the round trip. */
+    CHECK(edp_bl_level_to_nits(0, maxn, max) == 0 && edp_bl_level_to_nits(max, maxn, max) == Q(500) &&
+          edp_bl_level_to_nits(max + 100, maxn, max) == Q(500) && edp_bl_level_to_nits(5, maxn, 0) == 0);
+    CHECK(edp_bl_level_to_nits(716, maxn, max) >> 16 == 174);           /* where Windows left the panel */
+    for (uint32_t l = floor; l <= max; l++) {
+        uint64_t n = edp_bl_level_to_nits(l, maxn, max), exact = (uint64_t)l * Q(maxn);
+        CHECK(n * max + max >= exact && n * max <= exact + max);           /* within half a q16 step of the line */
+        CHECK(edp_bl_nits_to_level(n, maxn, floor, max) == l);
+    }
+    /* The darkest offer: the configured minimum, never below what the floor shows. */
+    uint64_t lo = edp_bl_min_nits_q16(EDP_BL_NITS_MIN_DEFAULT, maxn, floor, max);
+    CHECK(lo == edp_bl_level_to_nits(floor, maxn, max) && lo >> 16 == 10 && edp_bl_nits_to_level(lo, maxn, floor, max) == floor);
+    CHECK(edp_bl_min_nits_q16(20, maxn, floor, max) == Q(20) && edp_bl_nits_to_level(Q(20), maxn, floor, max) == 82);
+    /* The slider scale between the published ends. */
+    CHECK(edp_bl_slider_to_nits(0, lo, Q(500)) == lo && edp_bl_slider_to_nits(65536, lo, Q(500)) == Q(500) &&
+          edp_bl_slider_to_nits(1u << 20, lo, Q(500)) == Q(500) && edp_bl_slider_to_nits(77, Q(9), Q(9)) == Q(9));
+    CHECK(edp_bl_nits_to_slider(lo, lo, Q(500)) == 0 && edp_bl_nits_to_slider(Q(500), lo, Q(500)) == 65536 &&
+          edp_bl_nits_to_slider(Q(3), lo, Q(500)) == 0 && edp_bl_nits_to_slider(Q(9), Q(9), Q(9)) == 0);
+    for (uint32_t v = 0; v <= 65536; v += 512) {
+        uint32_t back = edp_bl_nits_to_slider(edp_bl_slider_to_nits(v, lo, Q(500)), lo, Q(500));
+        CHECK(back + 1 >= v && back <= v + 1);
+    }
+    /* The bottom of the slider is the floor, its top the panel's maximum. */
+    CHECK(edp_bl_nits_to_level(edp_bl_slider_to_nits(0, lo, Q(500)), maxn, floor, max) == floor);
+    CHECK(edp_bl_nits_to_level(edp_bl_slider_to_nits(65536, lo, Q(500)), maxn, floor, max) == max);
+}
+
 static void test_helpers(void)
 {
     uint32_t bits = 0;
@@ -204,37 +259,19 @@ static void test_helpers(void)
     CHECK(edp_bl_bits(10, 10, 10, 0, &bits));                  /* above 8 without the LSB register */
     CHECK(!edp_bl_bits(8, 8, 8, 0, &bits) && bits == 8);
     CHECK(edp_bl_max_level(11) == 2047 && edp_bl_max_level(8) == 255 && edp_bl_max_level(16) == 65535);
-    CHECK(edp_bl_floor_level(2047) == 205 && edp_bl_floor_level(255) == 26 && edp_bl_floor_level(1) == 1);
+    /* The floor is 2% of full scale, rounded up (EDP_BL_FLOOR_PERMILLE): level 41 of the A16's 2047. */
+    CHECK(edp_bl_floor_level(2047) == 41 && edp_bl_floor_level(255) == 6 && edp_bl_floor_level(1) == 1);
     for (uint32_t n = 1; n <= 16; n++) {
         uint32_t max = edp_bl_max_level(n), floor = edp_bl_floor_level(max);
         CHECK(floor >= 1 && floor <= max);
         CHECK((uint64_t)floor * 1000 >= (uint64_t)max * EDP_BL_FLOOR_PERMILLE);
+        CHECK(floor == 1 || (uint64_t)(floor - 1) * 1000 < (uint64_t)max * 20);   /* the first level at 2%, no more */
     }
-    CHECK(edp_bl_clamp(0, 205, 2047) == 205 && edp_bl_clamp(5000, 205, 2047) == 2047 &&
-          edp_bl_clamp(1000, 205, 2047) == 1000 && edp_bl_clamp(UINT64_MAX, 205, 2047) == 2047);
+    CHECK(edp_bl_clamp(0, 41, 2047) == 41 && edp_bl_clamp(5000, 41, 2047) == 2047 &&
+          edp_bl_clamp(1000, 41, 2047) == 1000 && edp_bl_clamp(UINT64_MAX, 41, 2047) == 2047);
     CHECK(edp_bl_encode(0x5A3, 1, b) == 2 && b[0] == 0x05 && b[1] == 0xA3 && edp_bl_decode(b, 1) == 0x5A3);
     CHECK(edp_bl_encode(0xC8, 0, b) == 1 && b[0] == 0xC8 && edp_bl_decode(b, 0) == 0xC8);
-    /* nits -> level: ends map onto floor and max, monotonic, round trip within one level */
-    uint32_t prev = 0;
-    for (uint64_t q = 0; q <= (600ull << 16); q += 1u << 12) {
-        uint32_t l = edp_bl_nits_to_level(q, 5, 500, 205, 2047);
-        CHECK(l >= 205 && l <= 2047 && l >= prev);
-        prev = l;
-    }
-    CHECK(edp_bl_nits_to_level(5ull << 16, 5, 500, 205, 2047) == 205);
-    CHECK(edp_bl_nits_to_level(500ull << 16, 5, 500, 205, 2047) == 2047);
-    CHECK(edp_bl_nits_to_level(0, 5, 500, 205, 2047) == 205);
-    CHECK(edp_bl_nits_to_level(UINT64_MAX >> 20, 5, 500, 205, 2047) == 2047);
-    CHECK(edp_bl_nits_to_level(100ull << 16, 500, 5, 205, 2047) == 205);   /* inverted range: the floor */
-    for (uint32_t l = 205; l <= 2047; l += 7)
-        CHECK(edp_bl_nits_to_level(edp_bl_level_to_nits(l, 5, 500, 205, 2047), 5, 500, 205, 2047) == l);
-    CHECK(edp_bl_slider_to_nits(0, 5, 500) == 5ull << 16 && edp_bl_slider_to_nits(65536, 5, 500) == 500ull << 16 &&
-          edp_bl_slider_to_nits(1u << 20, 5, 500) == 500ull << 16);
-    CHECK(edp_bl_nits_to_slider(5ull << 16, 5, 500) == 0 && edp_bl_nits_to_slider(500ull << 16, 5, 500) == 65536);
-    for (uint32_t v = 0; v <= 65536; v += 512) {
-        uint32_t back = edp_bl_nits_to_slider(edp_bl_slider_to_nits(v, 5, 500), 5, 500);
-        CHECK(back + 1 >= v && back <= v + 1);
-    }
+    test_curve();
     uint8_t caps[4] = {0x03, 0x07, 0x06, 0x10};
     uint64_t x1 = edp_bl_reply_x1(EDP_BL_STATE_MODE, EDP_BL_DETAIL_BITS, caps, 0x12);
     CHECK(edp_bl_reply_abi(x1) == EDP_BL_ABI && edp_bl_reply_state(x1) == EDP_BL_STATE_MODE &&
@@ -260,14 +297,14 @@ static void test_probe_and_set(void)
     M.status = ST_DONE;                           /* a status the firmware left behind */
     CHECK(call(EDP_BL_QUERY, 0, 0, r) == 0);
     CHECK(edp_bl_reply_abi(r[1]) == EDP_BL_ABI && state_of(r) == EDP_BL_STATE_READY);
-    CHECK((uint32_t)r[2] == 205 && r[2] >> 32 == 2047 && level_of(r) == 768 && (r[3] >> 32 & 0xff) == 11 &&
+    CHECK((uint32_t)r[2] == 41 && r[2] >> 32 == 2047 && level_of(r) == 768 && (r[3] >> 32 & 0xff) == 11 &&
           (r[3] >> 40 & 1) == 1);
     CHECK(M.dpcd_writes == 0 && M.gos == 3 && M.violations == 0);
     CHECK(call(EDP_BL_SET, 1500, 0, r) == 0 && level_of(r) == 1500 && panel_level() == 1500 && !(r[3] >> 41 & 1));
     CHECK(M.last_write_addr == 0x722 && M.last_write_len == 2 && M.last_write[0] == 0x05 && M.last_write[1] == 0xDC);
     unsigned gos = M.gos;
     CHECK(call(EDP_BL_SET, 1500, 0, r) == 0 && M.gos == gos);   /* unchanged: no traffic */
-    CHECK(call(EDP_BL_SET, 0, 0, r) == 0 && panel_level() == 205 && (r[3] >> 41 & 1));     /* never black */
+    CHECK(call(EDP_BL_SET, 0, 0, r) == 0 && panel_level() == 41 && (r[3] >> 41 & 1));      /* never black */
     CHECK(call(EDP_BL_SET, 70000, 0, r) == 0 && panel_level() == 2047 && (r[3] >> 41 & 1)); /* never past max */
     CHECK(M.dpcd[0x721] == 0x12 && M.violations == 0);
 }
@@ -280,7 +317,7 @@ static void test_byte_panel(void)
     M.dpcd[0x722] = 0x80; M.dpcd[0x723] = 0x55;
     M.dpcd[0x724] = 8; M.dpcd[0x725] = 8; M.dpcd[0x726] = 8;
     CHECK(call(EDP_BL_QUERY, 0, 0, r) == 0 && state_of(r) == EDP_BL_STATE_READY && level_of(r) == 0x80 &&
-          r[2] >> 32 == 255 && (uint32_t)r[2] == 26);
+          r[2] >> 32 == 255 && (uint32_t)r[2] == 6);
     CHECK(call(EDP_BL_SET, 200, 0, r) == 0 && M.dpcd[0x722] == 200 && M.dpcd[0x723] == 0x55 && M.last_write_len == 1);
     CHECK(M.violations == 0);
 }

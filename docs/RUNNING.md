@@ -198,12 +198,19 @@ self-test, for A/B rendering checks only.
 panel's brightness. The monitor gets `SNAP_EDP_BACKLIGHT`: its
 `ADRENO_GUEST_BACKLIGHT` call writes the panel's DPCD backlight level over the
 eDP controller's AUX channel, touching only the AUX transport registers and
-DPCD `0x721`-`0x723`, clamping the level to between 10% of full scale and the
+DPCD `0x721`-`0x723`, clamping the level to between 2% of full scale and the
 panel's maximum, and stopping for the boot on any failure with the brightness
 left as it was (`compat/edp-backlight.h`, event `EV_EDP_BACKLIGHT`). The guest
 gets the AuxKC pinned as `INPUT_AUXKC_DESKTOP_BACKLIGHT`, whose AdrenoX2 has the
-`AdrenoBacklight` service CoreBrightness drives, and the boot-arg
-`adreno_backlight=1`. The pinned collection, `next-20261024`, is built with
+`AdrenoBacklight` service, and the boot-arg `adreno_backlight=1`. CoreBrightness
+hands its nits to WindowServer, whose BrightnessControl writes them to the
+service as `brightness-nits` because the service carries
+`force-brightness-control` (the path and its evidence are in the kext's
+`src/AdrenoBacklight.h`). The service maps nits to a level proportionally, the
+top level being `adreno_backlight_max_nits` (default 500) and the darkest
+request `adreno_backlight_min_nits` (default 5, raised to the 2% floor's ~10
+nits); either boot-arg moves the curve without rebuilding the monitor. The
+collection is built with
 `KEXT_PROFILE=desktop-next I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh
 NAME` for a monitor without `--gpu-coherent` (`desktop-next` is
 `desktop-nocoherent` plus the service); a `--gpu-coherent` run needs a
