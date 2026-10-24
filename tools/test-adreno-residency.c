@@ -66,6 +66,9 @@
 #include <string.h>
 #include "adreno.h"
 #include "adreno-resource.h"
+#if ADRENO_RESIDENT_REPIN
+#include "adreno-resource-tail.h"
+#endif
 #if !defined(RESOURCE_BASE) && !ADRENO_RESOURCE_POOL
 #error "build with -DADRENO_RESOURCE_POOL=1 (both translation units), or -DRESOURCE_BASE against the base core"
 #endif
@@ -98,12 +101,15 @@ struct desc {
     uint64_t logical;
     uint32_t *pages;
 };
-struct mem { int live, desc, wired, fb; unsigned prep, idle, nmaps; int maps[3]; };
+struct mem { int live, desc, wired, fb; unsigned prep, idle, nmaps; int maps[3];
+             uint64_t maplen; };                 /* IOGPU's memory length when not the descriptor's (resident-evict) */
 struct map {
     int live, leaked, mem, backing, committed;
     unsigned backing_dir;
     struct adreno_resource r;
     int native;                        /* map+0x10 bit 0: CB0 range held */
+    int refuse_pin, refusal;           /* resident-evict: this map's pins fail; the kext's fRefusal */
+    uint64_t tail;                     /* resident-evict: the kext's fBackingBytes */
     uint64_t native_addr, native_len;
 };
 struct counts {
@@ -363,7 +369,13 @@ static int cb_pin(void *ctx)
     int id = M.mems[m->mem].desc;
     if (id < 0) return -1;
     struct desc *d = &M.descs[id];
+    if (m->refuse_pin) return -1;
+#if ADRENO_RESIDENT_REPIN
+    const int tail = d->logical < m->r.logical_length && adreno_tail_admit(d->logical, m->r.logical_length);
+    if (d->logical < m->r.logical_length && !tail) return -1;
+#else
     if (d->logical < m->r.logical_length) return -1;
+#endif
     unsigned dir = d->dir == DIR_OUT ? DIR_OUT : DIR_INOUT;
     if (prepare(d, dir)) {
         if (dir == DIR_OUT) return -1;
@@ -372,6 +384,9 @@ static int cb_pin(void *ctx)
     }
     d->refs++; d->our_pins++;
     m->backing = id; m->backing_dir = dir;
+#if ADRENO_RESIDENT_REPIN
+    m->tail = tail ? d->logical : 0;
+#endif
     M.c.pins++;
     return 0;
 }
@@ -387,7 +402,7 @@ static int cb_unpin(void *ctx)
     complete(d, m->backing_dir);
     CHECK(d->our_pins); d->our_pins--;
     int id = m->backing;
-    m->backing = -1;
+    m->backing = -1; m->tail = 0;
     put_desc(id);
     M.c.unpins++;
     return 0;
@@ -402,6 +417,9 @@ static uint64_t cb_physical(void *ctx, uint64_t offset, uint64_t *length)
     while (i + run < d->npages && d->pages[i + run] == d->pages[i] + run) run++;
     uint64_t bytes = (uint64_t)run * PAGE;
     if (bytes > d->logical - offset) bytes = d->logical - offset;   /* getPhysicalSegment stops at the end */
+#if ADRENO_RESIDENT_REPIN
+    if (m->tail) bytes = adreno_tail_span(offset, bytes, m->tail);  /* the kext's physicalPage */
+#endif
     *length = bytes;
     return pa_of(d->pages[i]);
 }
@@ -459,6 +477,23 @@ static int glue_commit(struct map *m)
     if (!M.policy) return same ? adreno_resource_commit(&m->r, &o) : ADRENO_RESOURCE_E_STATE;
     return adreno_resource_rewire(&m->r, &o, &M.res, same, M.options);
 }
+/* commitIntoGPUPageTable's answer to IOGPU: with ADRENO_RESIDENT_REPIN a clean refusal is reported committed and
+ * remembered; the map stays unadmitted (resident-evict). */
+#if ADRENO_RESIDENT_REPIN
+static int clean_refusal(const struct map *m)
+{
+    return m->r.flags == ADRENO_RESOURCE_RESERVED && m->r.length && !m->r.mapped_length && m->backing < 0;
+}
+#endif
+static int glue_native_commit(struct map *m)
+{
+    int e = glue_commit(m);
+#if ADRENO_RESIDENT_REPIN
+    if (!e) m->refusal = 0;
+    else if (M.policy && clean_refusal(m)) { m->refusal = e; return 0; }
+#endif
+    return e;
+}
 static int keep_verdict(const struct map *m)
 {
     return m->backing >= 0 && m->backing == M.mems[m->mem].desc &&
@@ -482,7 +517,7 @@ static int native_bind(struct map *m, uint64_t address, uint64_t length)
     for (unsigned k = 0; k < n; k++) M.native_owner[first + k] = (int)(m - M.maps) + 1;
     m->native = 1; m->native_addr = address; m->native_len = span;
     if (M.mems[m->mem].wired) {                                      /* add_mapping -> commit_pte */
-        if (glue_commit(m)) { M.c.bind_commit++; return 2; }
+        if (glue_native_commit(m)) { M.c.bind_commit++; return 2; }
         m->committed = 1;
     }
     return 0;
@@ -551,6 +586,18 @@ static int admitted(const struct map *m)       /* prepareForSubmission's check *
 {
     return m->r.flags == (ADRENO_RESOURCE_RESERVED | ADRENO_RESOURCE_PINNED) && m->r.length &&
            m->r.mapped_length == m->r.length && m->backing >= 0 && m->backing == M.mems[m->mem].desc;
+}
+/* prepareForSubmission: with ADRENO_RESIDENT_REPIN a cleanly refused map retries its pin under the native preparation. */
+static int glue_prepare(struct map *m)
+{
+#if ADRENO_RESIDENT_REPIN
+    if (m->refusal && clean_refusal(m)) {
+        int e = glue_commit(m);
+        if (!e) m->refusal = 0;
+        else if (clean_refusal(m)) m->refusal = e;
+    }
+#endif
+    return admitted(m);
 }
 
 /* ---- invariants ---- */
@@ -731,7 +778,7 @@ static int new_map_try(int mem)
     m->live = 1; m->mem = mem; m->backing = -1;
     struct mem *me = &M.mems[mem];
     CHECK(me->nmaps < 3);
-    if (glue_alloc(m, M.descs[me->desc].logical)) {
+    if (glue_alloc(m, me->maplen ? me->maplen : M.descs[me->desc].logical)) {
         m->live = 0;
         if (m->r.flags) { m->leaked = 1; M.c.frozen++; }          /* a frozen failure path keeps its state */
         return -1;
@@ -774,7 +821,7 @@ static int native_wire(struct mem *me)
     M.descs[me->desc].native++;
     for (unsigned k = 0; k < me->nmaps; k++) {
         struct map *m = &M.maps[me->maps[k]];
-        if (glue_commit(m)) {
+        if (glue_native_commit(m)) {
             for (unsigned j = 0; j < k; j++) {
                 struct map *done = &M.maps[me->maps[j]];
                 glue_release(done); done->committed = 0;
@@ -835,8 +882,8 @@ static int submit(const int *mems, const int *writes, unsigned n)
         if (!me->wired && !native_wire(me)) { me->prep--; ok = 0; break; }
         prepared[i] = 1;
         for (unsigned k = 0; k < me->nmaps; k++) {
-            const struct map *m = &M.maps[me->maps[k]];
-            if (!admitted(m)) { ok = 0; continue; }
+            struct map *m = &M.maps[me->maps[k]];
+            if (!glue_prepare(m)) { ok = 0; continue; }
             check_gpu_view(m, writes[i]);
         }
     }
@@ -1299,7 +1346,7 @@ static void wire_check(int mem)
     struct mem *me = &M.mems[mem];
     me->prep++;
     CHECK(me->wired || native_wire(me));
-    CHECK(admitted(map_of(mem)));
+    CHECK(glue_prepare(map_of(mem)));
     check_gpu_view(map_of(mem), 0);
     me->prep--;
     check_all(1);
@@ -1358,7 +1405,14 @@ static void scenarios(void)
     { uint32_t pages[6] = {700, 701, 702, 800, 801, 802};
       int mem = scenario_mem(pages, 6, 6 * PAGE, DIR_INOUT);
       M.fault_insert_at = 2; M.fault_insert_partial = 1;
+#if ADRENO_RESIDENT_REPIN
+      /* resident-evict: the clean refusal is reported committed; the map stays unadmitted until its next preparation */
+      M.mems[mem].prep++; CHECK(native_wire(&M.mems[mem]) && !admitted(map_of(mem)) &&
+                                map_of(mem)->refusal == ADRENO_RESOURCE_E_INSERT); M.mems[mem].prep--;
+      native_unwire(&M.mems[mem]);
+#else
       M.mems[mem].prep++; CHECK(!native_wire(&M.mems[mem])); M.mems[mem].prep--;
+#endif
       struct map *m = map_of(mem);
       CHECK(!(m->r.flags & (ADRENO_RESOURCE_PINNED | ADRENO_RESOURCE_FAILED)) && m->backing < 0);
       check_all(1);
@@ -1608,11 +1662,27 @@ static void pool_scenarios(void)
       wire_check(mem);
       M.mems[mem].prep++;
       M.fault_insert_at = (unsigned)M.c.inserts + 1; M.fault_insert_partial = 1;
+#if ADRENO_RESIDENT_REPIN
+      /* resident-evict: the cleanly refused commit is reported committed: the map is bound, unadmitted, and its next
+       * preparation pins and maps it at the same address. */
+      int alias = new_map_try(mem);
+      M.fault_insert_at = 0;
+      CHECK(alias >= 0 && !admitted(&M.maps[alias]) && M.maps[alias].refusal == ADRENO_RESOURCE_E_INSERT &&
+            M.pool.unbound == 0 && M.c.alloc_failed == 0);
+      const uint64_t va = M.maps[alias].r.address;
+      CHECK(glue_prepare(&M.maps[alias]) && M.maps[alias].r.address == va);
+      check_gpu_view(&M.maps[alias], 1);
+      M.mems[mem].prep--;
+      check_all(1);
+      drop_map(&M.mems[mem], M.mems[mem].nmaps - 1);
+      CHECK(M.pool.count == 1 && M.c.native_frees == 0);
+#else
       CHECK(new_map_try(mem) < 0);
       M.fault_insert_at = 0;
       M.mems[mem].prep--;
       CHECK(M.pool.unbound == 1 && M.pool.retried == 0 && M.pool.collisions == 0 && M.pool.count == 1 &&
             M.c.alloc_failed == 1 && M.c.native_frees == 0);
+#endif
       check_all(1);
       free_mem(mem); check_all(1); }
     /* 23. V2, D7: a clear that fails during retire freezes the resource: CB0 already freed, nothing pooled,
@@ -1755,6 +1825,131 @@ static void pool_scenarios(void)
 }
 #endif
 
+#ifndef RESOURCE_BASE
+/* ---- agents/resident-evict (REPORT.md): b12v17's "map failed -83" ---- */
+/* A client buffer: the descriptor holds `bytes`, IOGPU's memory (and map) length is its page-rounded DMA length
+ * (IOGPUSysMemory::withClientBuffer 0x56338-0x5636c). */
+static int tail_mem(uint64_t bytes)
+{
+    CHECK(M.nmems < MAX_MEMS);
+    int id = M.nmems++;
+    struct mem *me = &M.mems[id];
+    memset(me, 0, sizeof(*me));
+    me->live = 1; me->maplen = (bytes + PAGE - 1) & ~(PAGE - 1);
+    me->desc = new_desc(bytes, DIR_INOUT);
+    M.descs[me->desc].refs = 1;
+    new_map(id);
+    return id;
+}
+#if ADRENO_RESIDENT_REPIN
+struct cache_call { uint64_t va, bytes; unsigned direction; };
+static struct cache_call calls[8];
+static unsigned ncalls;
+static int record_cache(void *ctx, uint64_t va, uint64_t bytes, unsigned direction)
+{
+    (void)ctx; CHECK(ncalls < 8); calls[ncalls++] = (struct cache_call){va, bytes, direction};
+    return 0;
+}
+#endif
+static void repin_scenarios(void)
+{
+    const unsigned RUNS = ADRENO_COMMIT_RUNS;
+    /* 30. Evict -> re-prepare -> submit (the deployed pool, arena and reclaim build): two 64-page maps fit the budget,
+     *     the third unwire is refused and released; a replaced descriptor evicts a resident map. Both re-prepare at
+     *     their own reserved address, pin and map again, and a submission of both is admitted with the GPU seeing the
+     *     current descriptor. With and without the define: eviction was never the fault. */
+    reset(2, RUNS, 2 * 64 * PAGE, 30);
+    { int a = new_mem(64 * PAGE, DIR_INOUT, 0), b = new_mem(64 * PAGE, DIR_INOUT, 0), c = new_mem(64 * PAGE, DIR_INOUT, 0);
+      wire_check(a); wire_check(b); wire_check(c);
+      const uint64_t va = map_of(a)->r.address, vc = map_of(c)->r.address;
+      native_unwire(&M.mems[a]); native_unwire(&M.mems[b]); native_unwire(&M.mems[c]);
+      CHECK(M.res.retained == 2 && M.res.refused == 1 && map_of(c)->backing < 0 &&
+            map_of(c)->r.flags == ADRENO_RESOURCE_RESERVED);                     /* budget eviction */
+      replace_backing(&M.mems[a]);
+      check_all(1);
+      uint64_t pins = M.c.pins;
+      int list[2] = {a, c}, writes[2] = {1, 1};
+      CHECK(submit(list, writes, 2));                                             /* re-prepare both, then use them */
+      CHECK(M.res.evicted == 1 && M.c.pins == pins + 2 && map_of(a)->r.address == va && map_of(c)->r.address == vc);
+      CHECK(admitted(map_of(a)) && admitted(map_of(c)) && map_of(a)->backing == M.mems[a].desc);
+      for (int i = 0; i < M.nmems; i++) if (M.mems[i].live) free_mem(i);
+      CHECK(M.res.bytes == 0); check_all(1); }
+    /* 31. b12v17: a buffer of 3 pages + 0x1010 bytes under IOGPU's 4-page map. The base refuses the pin on every wire
+     *     (E_PIN, kIOReturnBadArgument), before and after any eviction; with the define it pins, maps the last page
+     *     whole, survives unwire, budget eviction and a replaced descriptor, and its cache maintenance stops at the
+     *     descriptor's last line, the partial one cleaned rather than invalidated. */
+    reset(2, RUNS, 512ULL << 20, 31);
+    { const uint64_t bytes = 3 * PAGE + 0x1010;
+      int t = tail_mem(bytes);
+      struct mem *me = &M.mems[t];
+      CHECK(map_of(t)->r.logical_length == 4 * PAGE);
+      for (int round = 0; round < 3; round++) {
+          me->prep++;
+#if ADRENO_RESIDENT_REPIN
+          CHECK(me->wired || native_wire(me));
+          CHECK(admitted(map_of(t)) && map_of(t)->tail == bytes && map_of(t)->r.mapped_length == 4 * PAGE);
+          check_gpu_view(map_of(t), 1);
+          me->prep--;
+          check_all(1);
+          if (round == 0) native_unwire(me);                                      /* resident */
+          if (round == 1) { native_unwire(me); replace_backing(me); }             /* stale: evicted, re-pinned */
+          if (round == 2) { M.res.budget = 0; native_unwire(me); }                /* released: re-pinned at free */
+#else
+          const uint64_t pins = M.c.pins;
+          CHECK(!native_wire(me) && !admitted(map_of(t)) && map_of(t)->backing < 0 && M.c.pins == pins);
+          me->prep--;
+          check_all(1);
+#endif
+      }
+#if ADRENO_RESIDENT_REPIN
+      CHECK(M.res.evicted == 1);
+      me->prep++; CHECK(native_wire(me)); me->prep--;
+      for (unsigned dir = ADRENO_CACHE_TO_DEVICE; dir <= ADRENO_CACHE_FROM_DEVICE; dir++) {
+          ncalls = 0;
+          const struct map *m = map_of(t);
+          CHECK(!adreno_tail_cache(&m->r, m->tail, dir, 0, m->r.logical_length, record_cache, NULL));
+          const uint64_t end = m->r.address + ((bytes + 63) & ~63ULL), whole = m->r.address + (bytes & ~63ULL);
+          CHECK(ncalls == (dir == ADRENO_CACHE_FROM_DEVICE ? 2u : 1u) && calls[0].va == m->r.address);
+          CHECK(calls[ncalls - 1].va + calls[ncalls - 1].bytes == end);
+          if (dir == ADRENO_CACHE_FROM_DEVICE)
+              CHECK(calls[0].bytes == whole - m->r.address && calls[0].direction == dir &&
+                    calls[1].va == whole && calls[1].direction == ADRENO_CACHE_TO_DEVICE);
+      }
+      native_unwire(me);
+#endif
+      free_mem(t); check_all(1); }
+    /* 32. A map that cannot be pinned (here: its own refusal) among the maps of one memory. The base fails the native
+     *     wire of the whole memory, so the other task's submission fails too; with the define the memory wires, the
+     *     other map is admitted, the refused map stays unadmitted and retries at its own preparation. */
+    reset(2, RUNS, 512ULL << 20, 32);
+    { int s = new_mem(4 * PAGE, DIR_INOUT, 0);
+      new_map(s);
+      struct mem *me = &M.mems[s];
+      struct map *own = &M.maps[me->maps[0]], *other = &M.maps[me->maps[1]];
+      other->refuse_pin = 1;
+      me->prep++;
+#if ADRENO_RESIDENT_REPIN
+      CHECK(native_wire(me));
+      CHECK(admitted(own) && !admitted(other) && other->committed && other->refusal == ADRENO_RESOURCE_E_PIN);
+      check_gpu_view(own, 1);
+      CHECK(!glue_prepare(other));
+      other->refuse_pin = 0;
+      CHECK(glue_prepare(other) && !other->refusal);
+      check_gpu_view(other, 1);
+      me->prep--;
+      check_all(1);
+      native_unwire(me);
+#else
+      CHECK(!native_wire(me) && !admitted(own) && !admitted(other));
+      me->prep--;
+      other->refuse_pin = 0;
+#endif
+      check_all(1);
+      free_mem(s); check_all(1); }
+    printf("PASS repin\n");
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *what = argc > 1 ? argv[1] : "all";
@@ -1764,6 +1959,7 @@ int main(int argc, char **argv)
     if (all || !strcmp(what, "race")) race();
 #ifndef RESOURCE_BASE
     if (all || !strcmp(what, "pool")) pool_scenarios();
+    if (all || !strcmp(what, "repin")) repin_scenarios();
 #endif
     if (all || !strcmp(what, "workload")) {
         workload("old", 0, 0, 512 * MiB, 4000);
