@@ -1164,6 +1164,16 @@ def boot_addition(args):
     if active_us is not None:
         need(active_us == 0 or 2000 <= active_us <= 100000, '--input-active-us must be 0 or 2000..100000')
         extra.append(f'snap_i2c_active_us={active_us}')
+    # --input-fnkeys: the keyboard's Fn-key layer (drivers/snap-i2c-hid/src/hid-keyboard.h HID_FNKEYS_*), read by a
+    # SnapI2CHID built with SNAP_I2C_HID_FNKEYS; the same sets the kext refuses are refused here.
+    fnkeys = getattr(args, 'input_fnkeys', None)
+    if fnkeys is not None:
+        need(getattr(args, 'input', False), '--input-fnkeys needs --input (the SnapI2CHID AuxKC)')
+        need(0 < fnkeys <= 0x1f and not fnkeys & ~0x1f, '--input-fnkeys must be 0x1..0x1f (hid-keyboard.h HID_FNKEYS_*)')
+        need((fnkeys >> 3) & 3 != 3, '--input-fnkeys: brightness encoding 3 (0x18) does not exist')
+        need(not fnkeys & 0x4 or fnkeys & 0x1, '--input-fnkeys: the host Fn-lock (0x4) needs translation (0x1)')
+        need(fnkeys & 0x3, '--input-fnkeys: give translation (0x1) or the raw log (0x2)')
+        extra.append(f'snap_i2c_fnkeys={fnkeys}')
     if zone is not None:
         need(ZONE_LOG_NAME.fullmatch(zone), f'--zone-log {zone!r}: XNU zone names are [A-Za-z0-9_.], at most 64')
         extra.append(f'zlog1={zone}')
