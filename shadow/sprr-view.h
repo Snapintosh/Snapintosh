@@ -15,7 +15,28 @@
  * commit. A failing write callback is terminal: never resume a partial sync.
  * alloc must return fresh, zeroed pages that cannot alias any source table. */
 #define SPRR_VIEW_CPUS 6u
+/* SNAP_VIEW_RECLAIM (opt-in; cycle.py installed-fresh --view-reclaim): the
+ * pool holds 256 tables instead of 128, and sprr_views_reclaim gives back the
+ * kernel copies no protected leaf needs any more. Off, every layout and the
+ * monitor are unchanged.
+ *
+ * Why: installed-fresh-desktop-20261024-next1 stopped after 1,104 s (exit 7,
+ * RETYPE to ROZONE refused) when its kernel views held 128 tables: 1 + 1 + 8
+ * upper and 118 level-3 copies. Its context shows 114 of those 118 still held
+ * selector2 leaves (122 ROZONE protects, 3 releases: each 16K RO-zone frame
+ * lands in its own 2 MiB table), so the live set itself had reached the pool.
+ * In the 86 preserved installed-fresh runs of 6 minutes or more, releases
+ * stayed at 2 to 8 while protects reached 122 (OBSERVED, context.bin).
+ * Reclaim covers released frames and TXM imports; the wider pool covers the
+ * live set. */
+#ifndef SNAP_VIEW_RECLAIM
+#define SNAP_VIEW_RECLAIM 0
+#endif
+#if SNAP_VIEW_RECLAIM
+#define SPRR_VIEW_TABLES 256u
+#else
 #define SPRR_VIEW_TABLES 128u
+#endif
 /* A bounded, read-only mapping of an entire canonical 4K table. The backend
  * validates the allocation span and keeps the bytes and mapping stable under
  * the service token through preflight and commit. No pointer is retained. */
@@ -24,6 +45,9 @@ typedef sprr_table_reader sprr_user_table_reader;
 struct sprr_view_table {
     uint64_t source, copy[SPRR_VIEW_CPUS], level;
 };
+/* tables[0..count) are the copied tables, the root first. With
+ * SNAP_VIEW_RECLAIM, entries past count may hold the pages of retired tables
+ * (source 0) or of a failed add, kept for the next add at that position. */
 struct sprr_views {
     uint64_t canonical_root, count;
     uint64_t syncs[SPRR_VIEW_CPUS];
@@ -35,6 +59,34 @@ struct sprr_views {
 int sprr_views_init(struct sprr_views *, const struct shadow *);
 int sprr_views_prepare(struct sprr_views *, const struct shadow *, uint64_t va);
 uint64_t sprr_views_root(const struct sprr_views *, unsigned cpu);
+#if SNAP_VIEW_RECLAIM
+/* Kernel views only: the selector2/4 decode of sprr_views_sync_cpu*, never
+ * a user view, a native view or views carrying an sprr_view_memo (whose
+ * claims assume append-only metadata).
+ *
+ * A copy is needed while some leaf under it translates differently from its
+ * raw descriptor on some CPU under some PPERM: a valid selector2 or selector4
+ * leaf (selector9, which a sync refuses, is kept too), or an upper-level entry
+ * leading to a needed copy. Every other copied table is retired; the root
+ * never is. Kept tables move to the front in their order, so positions change.
+ *
+ * Order: every source is read before anything changes (a read failure or an
+ * unconfigured view returns -1 unchanged; nothing to retire returns 0
+ * unchanged). Then the metadata is compacted: a retired table's six pages wait
+ * past count with source 0 and level SPRR_VIEW_RETIRED. quiesce(ctx) must drop
+ * every record kept by table position (reuse snapshot, publication rows), sync
+ * every CPU's copies -- a retired table's parent entries then name its
+ * canonical source again, which translates identically -- publish them and
+ * complete a broadcast invalidation of every EL1&0 translation (TLBI
+ * ALLE1IS, every VMID) before it returns 1. Only
+ * then do the pages become reusable (level 0): the next add() at that position
+ * takes them instead of allocating, and its sync rewrites every word before a
+ * parent links them. Returns the number retired, or -1 after a failed quiesce
+ * (terminal, as a failed sync: the views hold only kept tables and the
+ * retired pages are never reused). Caller holds the service lock throughout. */
+#define SPRR_VIEW_RETIRED 4u
+int sprr_views_reclaim(struct sprr_views *,const struct shadow *,int (*quiesce)(void *),void *ctx);
+#endif
 /* Translate selector2 A/B. Selector9 2/3 state is accepted only with the
  * caller's proof that the canonical/user views contain no affected leaves;
  * mutation paths must retain that exclusion. This is not a general SPRR MMU. */

@@ -103,7 +103,9 @@ order = ['sprr_reuse_current', 'sprr_reuse_invalidate', 'pperm_tpro_preflight',
          'tlbi alle1is', 'sprr_reuse_repin']
 positions = [impl.index(token) for token in order]
 check(positions == sorted(positions), 'PPERM proof, invalidate, write, publish, TLBI, repin order')
-check('SPRR_KERNEL_VIEW_PPERM' in impl and '!ps->pending[cpu][0] && !ps->pending[cpu][1]' in impl,
+publish_h = (ROOT / 'shadow/sprr-publish.h').read_text()
+check('SPRR_KERNEL_VIEW_PPERM' in impl and 'sprr_publish_row_empty(ps,cpu)' in impl and
+      'return !p->pending[cpu][0] && !p->pending[cpu][1];' in publish_h,
       'skip requires the unchanged kernel permission bit and no pending publication')
 check(re.search(r'if\(invalidate\) \{\s*__asm__ volatile\("dsb ishst; tlbi alle1is', impl),
       'the PPERM TLBI is omitted only when the caller folds it')

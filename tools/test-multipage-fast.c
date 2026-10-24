@@ -605,7 +605,7 @@ static int multipage_close(struct context *c,uint64_t elr,const struct sptm_mult
 #if MUTANT_PENDING_LEFT
         if(0 &&
 #else
-        if((c->kernel_publish_state.pending[cpu][0] || c->kernel_publish_state.pending[cpu][1]) &&
+        if(!sprr_publish_row_empty(&c->kernel_publish_state,cpu) &&
 #endif
            !kernel_publish_cpu(c,cpu)) {
             record(c,EV_UPDATE_FAILED,elr,SPTM_SHADOW_FAILED,g->target,g->aperture_flags);return 0;

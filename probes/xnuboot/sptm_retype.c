@@ -15,10 +15,15 @@ static int sptm_retype_rozone(void *ctx,uint64_t pa,uint64_t old_type,uint64_t n
     if(sptm_papt_prepare(&m,&b,&a,&moved,pa,old_type,new_type,&change)!=SPTM_OK)return 0;
     /* A SLIDE_REGION-moved frame also has the alias XNU's phystokv uses;
      * both leaves need private paths before either becomes selector2. */
+#if SNAP_VIEW_RECLAIM
+    for(unsigned i=0;i<change.count;i++)if(sprr_pte_class(change.leaf[i].after)==9)return 0;
+    if(!kernel_views_prepare_change(c,&change))return 0;
+#else
     struct shadow s=kernel_shadow(c);
     for(unsigned i=0;i<change.count;i++)
         if(sprr_pte_class(change.leaf[i].after)==9 ||
            !sprr_views_prepare(&c->kernel_views,&s,change.leaf[i].va))return 0;
+#endif
     /* Detach copied paths while canonical descriptors still have their old
      * permissions. No guest CPU may see an untranslated raw selector2 leaf. */
     shadow_tlb_sync(c);if(c->kernel_view_failed)return 0;
@@ -41,10 +46,15 @@ static int sptm_retype_txm_default(void *ctx,uint64_t pa,uint64_t old_type,uint6
     struct sptm_aperture a={p->mem_low,p->ram_aperture_va,p->mem_high-p->mem_low};
     struct sptm_moved moved=xnu_moved(c);struct sptm_papt_change change;
     if(sptm_papt_prepare(&m,&b,&a,&moved,pa,old_type,new_type,&change)!=SPTM_OK)return 0;
+#if SNAP_VIEW_RECLAIM
+    for(unsigned i=0;i<change.count;i++)if(sprr_pte_class(change.leaf[i].after)!=4)return 0;
+    if(!kernel_views_prepare_change(c,&change))return 0;
+#else
     struct shadow s=kernel_shadow(c);
     for(unsigned i=0;i<change.count;i++)
         if(sprr_pte_class(change.leaf[i].after)!=4 ||
            !sprr_views_prepare(&c->kernel_views,&s,change.leaf[i].va))return 0;
+#endif
     /* Detach every CPU's path while the canonical aperture is still class3.
      * After commit, private class4 is always EL1 RO/NX, with no EL0 access. */
     shadow_tlb_sync(c);if(c->kernel_view_failed)return 0;

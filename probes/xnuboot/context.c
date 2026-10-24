@@ -238,6 +238,14 @@ struct context {
     struct service_detail service_detail[GUEST_CPU_COUNT];
     struct sprr_publish_state kernel_publish_state;
     struct sprr_reuse_state kernel_reuse_state;
+#if SNAP_VIEW_RECLAIM
+    /* kernel_views_prepare_change: reclaims that retired tables, tables they
+     * retired, refusals that found nothing to retire, the highest count. With
+     * this define every offset from kernel_views on moves anyway (the wider
+     * struct sprr_views); placed after pauth_bank so PAUTH_BANK_CONTEXT moves
+     * by whole views only. */
+    struct kernel_view_reclaim {uint64_t reclaims,retired,full,high_water;} kernel_view_reclaim;
+#endif
     uint64_t user_fused_syncs;
     struct sprr_class_proof kernel_class_proof;
     struct sprr_user_prepare_stats user_prepare_stats;

@@ -3,7 +3,12 @@
 #include "root-publish.h"
 #include "sprr-private-pages.h"
 
+/* SPRR_VIEW_TABLES: one user view's copies at most (sprr-view.h). */
+#if SNAP_VIEW_RECLAIM
+#define USER_PUBLISH_MAX 256u
+#else
 #define USER_PUBLISH_MAX 128u
+#endif
 struct user_publish_stats {
     uint64_t calls, complete, considered, published, skipped, errors;
 };
@@ -23,7 +28,7 @@ static inline int user_publish_flush(struct root_publish_state *dirty,
     stats->calls++;
     if(!pages || !count || count>USER_PUBLISH_MAX || !publish_page ||
        !root_publish_geometry(first,allocated))goto fail;
-    unsigned indices[USER_PUBLISH_MAX];uint64_t selected[2]={0,0};unsigned changed=0;
+    unsigned indices[USER_PUBLISH_MAX];uint64_t selected[USER_PUBLISH_MAX/64]={0};unsigned changed=0;
     for(unsigned n=0;n<count;n++) {
         uint64_t pa=pages[n];
         if((pa&4095) || pa<first || pa>=allocated)goto fail;

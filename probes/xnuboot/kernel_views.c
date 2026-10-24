@@ -194,6 +194,50 @@ static void shadow_tlb_sync(struct context *c)
     __asm__ volatile("dsb ishst; tlbi alle1is; dsb ish; isb" ::: "memory");
     c->shadow_tlb_syncs++;
 }
+#if SNAP_VIEW_RECLAIM
+/* sprr_views_reclaim's quiesce. The reuse snapshot and the publication rows
+ * name tables by position, which just moved: drop both, then shadow_tlb_sync
+ * syncs all six views in full (a retired table's parent entries name its
+ * canonical source again), publishes every remaining copy and completes the
+ * all-VMID TLBI. After that no walk, cached or new, reaches a retired page.
+ * The variant columns need nothing: the refresh's save makes them inexact. */
+static int kernel_views_quiesce(void *ctx)
+{
+    struct context *c=ctx;
+#if SNAP_KERNEL_VIEW_REUSE
+    sprr_reuse_invalidate(&c->kernel_reuse_state);
+#endif
+#if SNAP_KERNEL_DIRTY_PUBLISH
+    sprr_publish_reset(&c->kernel_publish_state);
+#endif
+    shadow_tlb_sync(c);
+    return !c->kernel_view_failed;
+}
+/* The private paths of every leaf a protecting retype changes, before its
+ * first detach (the callers' shadow_tlb_sync). A full pool refuses with no
+ * change; then the copies no protected leaf needs are retired and the whole
+ * change is prepared again from its first leaf: the reclaim retires any path
+ * an earlier leaf of this change prepared, since that leaf is not protected
+ * until the commit. A second refusal (nothing to retire) fails the retype as
+ * before. */
+static int kernel_views_prepare_change(struct context *c,const struct sptm_papt_change *change)
+{
+    struct sprr_views *v=&c->kernel_views;struct kernel_view_reclaim *r=&c->kernel_view_reclaim;
+    struct shadow s=kernel_shadow(c);
+    for(int again=0;;again=1) {
+        unsigned i=0;
+        while(i<change->count && sprr_views_prepare(v,&s,change->leaf[i].va))i++;
+        if(i==change->count) {
+            if(r->high_water<v->count)r->high_water=v->count;
+            return 1;
+        }
+        if(again || v->count+3<=SPRR_VIEW_TABLES)return 0;
+        int retired=sprr_views_reclaim(v,&s,kernel_views_quiesce,c);
+        if(retired<=0) {r->full+=!retired;return 0;}
+        r->reclaims++;r->retired+=(unsigned)retired;
+    }
+}
+#endif
 #if SNAP_USER_UPDATE_KERNEL_SKIP
 /* User-root UPDATE_DISJOINT: sptm_mac_update_user_disjoint reaches only the
  * user backend (user canonical shadow, user private copies, guest PTE memory
@@ -333,7 +377,7 @@ static int kernel_change_pperm_impl(struct context *c,uint64_t pperm,int invalid
     const struct sprr_publish_state *ps=&c->kernel_publish_state;
     skip=current && !((before^pperm)&SPRR_KERNEL_VIEW_PPERM) &&
         ps->root==c->kernel_views.canonical_root && ps->count==c->kernel_views.count &&
-        !ps->pending[cpu][0] && !ps->pending[cpu][1];
+        sprr_publish_row_empty(ps,cpu);
 #if SNAP_KERNEL_PPERM_VARIANTS
     if(!skip && current && ((before^pperm)&SPRR_KERNEL_VIEW_PPERM) &&
        (swap=kernel_variant_swap(c,&s,cpu,before,pperm))<0)return 0;
