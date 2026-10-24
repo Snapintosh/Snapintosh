@@ -306,6 +306,12 @@ def parse(argv=None):
     p.add_argument('--input-active-us', type=int, default=None,
                    help='with --present-latch: guest boot-arg snap_i2c_active_us, the poll period while touched '
                         '(default 4000; 0 = the configured 8 ms throughout)')
+    p.add_argument('--input-fnkeys', type=lambda v: int(v, 0), default=None, metavar='FLAGS',
+                   help='with --input: guest boot-arg snap_i2c_fnkeys=FLAGS for a SnapI2CHID built with '
+                        'SNAP_I2C_HID_FNKEYS (drivers/snap-i2c-hid PROFILE=desktop-fnkeys; others ignore it): 0x1 '
+                        'the keyboard\'s ASUS hotkeys as macOS usages, 0x2 the rate-limited raw log of what the F-row '
+                        'sends, 0x4 the host Fn-lock on Fn+Esc (needs 0x1), 0x8/0x10 the brightness encoding '
+                        '(hid-keyboard.h); give it to every mode of the attempt')
     p.add_argument('--hide-amx', action='store_true',
                    help='clear the application AMX-version capability field; preserves kernel AMXIDR '
                         'and does not expose SME; give it to every mode of the attempt')

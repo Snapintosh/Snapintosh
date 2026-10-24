@@ -28,6 +28,11 @@ No hardware. docs/A16-INPUT-INSTALLED-20261017.md. Checks, in order:
     previous run's leftover controller after a panic and a chainload, v39, and the Precision
     Touchpad switch behind its feature hook, docs/A16-INPUT-PTP-20261020.md), then mutations of the
     driver that must fail it.
+ 8. With -DSNAP_I2C_HID_LATENCY=1: every scenario, the latency ones, and their mutations.
+ 9. With -DSNAP_I2C_HID_FNKEYS=1 (the keyboard's Fn-key layer, hid-keyboard.h): the transport test
+    with its Fn-key groups, mutations of hid-keyboard.c it must catch, every glue scenario plus the
+    Fn-key ones (alone and with SNAP_I2C_HID_LATENCY, the desktop-fnkeys profile's pair), and
+    mutations of the glue.
 """
 from pathlib import Path
 import argparse
@@ -88,6 +93,50 @@ LATENCY_MUTATIONS = (
     ('never become active', 'fLastReportUs = now ? now : 1;', '(void)0;'),
     ('an uncapped lead', '    if (lead > cap)\n        lead = cap;                                        /* T3 */', '    (void)cap;'),
     ('ignore the boot-arg', '(void)PE_parse_boot_argn("snap_i2c_active_us", &active, sizeof(active));', '(void)0;'),
+)
+# The keyboard's Fn-key layer, with -DSNAP_I2C_HID_FNKEYS=1 only (test_9_fnkeys).
+FNKEYS_FLAG = '-DSNAP_I2C_HID_FNKEYS=1'
+FNKEYS_SCENARIOS = ('fnkeys-off', 'fnkeys-translate', 'fnkeys-raw-log', 'fnkeys-yield', 'fnkeys-host-lock',
+                    'fnkeys-bootarg', 'fnkeys-rejected')
+# (description, old, new) in src/hid-keyboard.c: each must fail tools/test-snap-i2c-hid.c's Fn-key groups.
+FNKEYS_C_MUTATIONS = (
+    ('swap brightness up and down', '*usage = up ? 0x0004u : 0x0005u;', '*usage = up ? 0x0005u : 0x0004u;'),
+    ('pass report 55\'s brightness through', 'if (page == HID_KBD_PAGE_CONSUMER && frow[i].consumer == usage)', 'if (0)'),
+    ('map microphone mute to System Speaker Mute', '0x00a9},        /* F10', '0x00a7},        /* F10'),
+    ('release as the mapping now, not as pressed',
+     '    *op = h->out_page;\n    *ou = h->out_usage;\n    memset(h, 0, sizeof(*h));',
+     '    memset(h, 0, sizeof(*h));\n    remap(c->fn, page, usage, op, ou);'),
+    ('raw-log every key', '#define BAND_FIRST      0x3au', '#define BAND_FIRST      0x04u'),
+    ('take any modifier for a chord', '#define MODS_GUI        0x88u', '#define MODS_GUI        0xffu'),
+    ('take 0xFF for a code', 'r[1 + i] && r[1 + i] != 0xffu &&', 'r[1 + i] &&'),
+    ('flip the lock without HID_FNKEYS_HOST_LOCK', 'if (v == VENDOR_FN_ESC && (fn->flags & HID_FNKEYS_HOST_LOCK)) {',
+     'if (v == VENDOR_FN_ESC) {'),
+    ('flip the lock again while Fn+Esc is held', '        if (contains(fn->vendor, HID_FNKEYS_VENDOR_SLOTS, v))\n            continue;',
+     '        if (contains(fn->vendor, HID_FNKEYS_VENDOR_SLOTS, v) && v != VENDOR_FN_ESC)\n            continue;'),
+    ('accept report 90 at any length', 'if (len != HID_KBD_VENDOR_BYTES) {', 'if (len < 2u) {'),
+    ('translate without HID_FNKEYS_TRANSLATE', '    if (!translate)\n        return;\n    if (page == HID_KBD_PAGE_KEYBOARD)',
+     '    if (page == HID_KBD_PAGE_KEYBOARD)'),
+    ('dispatch reports 54 and 55 while yielded',
+     '    if (fn->yielded)\n        return result == HID_KBD_EVENTS ? HID_KBD_IGNORED : result;\n', ''),
+    ('never drop a raw-log line', 'if (!rate->tokens || rate->lines >= HID_FNKEYS_RATE_LIFETIME) {', 'if (0) {'),
+    ('no lifetime cap', 'if (!rate->tokens || rate->lines >= HID_FNKEYS_RATE_LIFETIME) {', 'if (!rate->tokens) {'),
+    ('accept unknown flags', 'if (flags & ~HID_FNKEYS_KNOWN)\n        return HID_FNKEYS_REFUSED_BITS;', ''),
+)
+# (description, old, new) in SnapI2CHID.cpp's unit: each must fail one of FNKEYS_SCENARIOS.
+FNKEYS_MUTATIONS = (
+    ('on without the boot-arg', 'hid_fnkeys_init(&fFn, given ? flags : 0u);', 'hid_fnkeys_init(&fFn, given ? flags : 1u);'),
+    ('drop report 90 while yielded',
+     '            (void)hid_fnkeys_translate(&fFn, &fState, report, len, emit, this, note, this);', '            (void)0;'),
+    ('keep dispatching reports 54 and 55 after yielding', '        fFn.yielded = 1;', '        (void)0;'),
+    ('release held hotkeys raw when yielding', '        hid_fnkeys_release_keyboard(&fFn, &fState, emit, this);',
+     '        hid_kbd_release_all(&fState, emit, this);'),
+    ('stop without releasing report 90', '        hid_fnkeys_release_all(&fFn, &fState, emit, this);',
+     '        hid_kbd_release_all(&fState, emit, this);'),
+    ('log past the rate limit', '    if (!hid_fnkeys_rate_allow(&fRate, uptimeUs(now)))\n        return false;',
+     '    (void)hid_fnkeys_rate_allow(&fRate, uptimeUs(now));'),
+    ('never name refused inputs', '        fKeyboard->noteRejected(fDev->rejected, fDev->rejected_len);', '        (void)0;'),
+    ('show a refused keyboard report\'s bytes', '    if (input[2] == HID_KBD_REPORT_KEYS) {', '    if (0) {'),
+    ('name refused inputs without the raw log', '    if (!rawLog() || len < 3u || !mayLog())', '    if (len < 3u || !mayLog())'),
 )
 STANDIN_HEADERS = ('IOKit/IOBufferMemoryDescriptor.h', 'IOKit/IOCommandGate.h', 'IOKit/IOLib.h',
                    'IOKit/IOService.h', 'IOKit/IOTimerEventSource.h', 'IOKit/IOWorkLoop.h',
@@ -207,15 +256,18 @@ def build_standin(work):
     return inc
 
 
-def compile_harness(work, driver_cpp, tag, flags=()):
+def compile_harness(work, driver_cpp, tag, flags=(), c_flags=()):
+    """c_flags: defines the hardware-independent units also take (SNAP_I2C_HID_FNKEYS: hid-keyboard.c); their
+    objects are cached per define set."""
     out = work / f'start-{tag}'
     src = DRIVER / 'src'
     objs = []
+    suffix = ''.join('-' + f.lstrip('-D').split('=')[0].lower() for f in c_flags)
     for name in ('geni-i2c', 'hid-rdesc', 'i2c-hid', 'hid-keyboard', 'hid-pointer', 'hid-ptp', 'hid-mt2'):
-        obj = work / f'{name}.o'
+        obj = work / f'{name}{suffix}.o'
         if not obj.exists():
             subprocess.run(['cc', '-std=gnu11', '-O1', '-g', '-fsanitize=address,undefined', '-Wall', '-Wextra',
-                            '-Werror', f'-I{src}', '-c', str(src / f'{name}.c'), '-o', str(obj)], check=True)
+                            '-Werror', *c_flags, f'-I{src}', '-c', str(src / f'{name}.c'), '-o', str(obj)], check=True)
         objs.append(str(obj))
     harness = work / f'harness-{tag}.cpp'
     text = (ROOT / 'tools/test-snap-i2c-hid-start.cpp').read_text()
@@ -395,6 +447,56 @@ class Kext(unittest.TestCase):
             if all(run(str(binary), s).returncode == 0 for s in LATENCY_SCENARIOS + ('latency-waits',)):
                 survivors.append(what)
         self.assertEqual(survivors, [], 'latency mutations the harness did not catch')
+
+    def test_9_fnkeys(self):
+        # The keyboard's Fn-key layer (hid-keyboard.h): the transport test with its Fn-key groups, then every mutation
+        # of hid-keyboard.c it must catch; the glue with the define passes every scenario (built in and off by
+        # default, the keyboard is today's) and the Fn-key ones, also with SNAP_I2C_HID_LATENCY (the desktop-fnkeys
+        # profile's pair); every mutation of the glue is caught.
+        src = DRIVER / 'src'
+        units = [src / f'{n}.c' for n in ('geni-i2c', 'hid-rdesc', 'i2c-hid', 'hid-pointer', 'hid-ptp', 'hid-mt2')]
+
+        def transport(keyboard_c, tag):
+            out = self.work / f'test-snap-i2c-hid-{tag}'
+            built = run('cc', '-std=gnu11', '-O1', '-g', '-fsanitize=address,undefined', '-Wall', '-Wextra', '-Werror',
+                        FNKEYS_FLAG, f'-I{src}', str(ROOT / 'tools/test-snap-i2c-hid.c'), *map(str, units),
+                        str(keyboard_c), '-o', str(out))
+            if built.returncode:
+                return built
+            return run(str(out), cwd=ROOT)
+
+        result = transport(src / 'hid-keyboard.c', 'fnkeys')
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+        self.assertRegex(result.stdout, r"\b\d+ checks passed \(34 groups and the Fn-key layer's 8\)")
+        text = (src / 'hid-keyboard.c').read_text()
+        survivors = []
+        for n, (what, old, new) in enumerate(FNKEYS_C_MUTATIONS):
+            self.assertEqual(text.count(old), 1, what)
+            mutant = self.work / f'fnkeys-c-mutant-{n}' / 'hid-keyboard.c'
+            mutant.parent.mkdir(exist_ok=True)
+            mutant.write_text(text.replace(old, new))
+            if transport(mutant, f'fnkeys-c-mutant-{n}').returncode == 0:
+                survivors.append(what)
+        self.assertEqual(survivors, [], 'hid-keyboard.c mutations the transport test did not catch')
+
+        for tag, flags, scenarios in (('fnkeys', (FNKEYS_FLAG,), SCENARIOS + FNKEYS_SCENARIOS),
+                                      ('fnkeys-latency', (FNKEYS_FLAG, '-DSNAP_I2C_HID_LATENCY=1'),
+                                       SCENARIOS + LATENCY_SCENARIOS + FNKEYS_SCENARIOS)):
+            harness = compile_harness(self.work, DRIVER / 'src/SnapI2CHID.cpp', tag, flags, (FNKEYS_FLAG,))
+            for scenario in scenarios:
+                result = run(str(harness), scenario)
+                self.assertEqual(result.returncode, 0, f'{tag} {scenario}: {result.stdout[-1500:]}{result.stderr[-1500:]}')
+                self.assertIn(f'PASS {scenario}', result.stdout)
+        survivors = []
+        text = read_source(DRIVER / 'src/SnapI2CHID.cpp')
+        for n, (what, old, new) in enumerate(FNKEYS_MUTATIONS):
+            self.assertEqual(text.count(old), 1, what)
+            mutant = self.work / f'fnkeys-mutant-{n}.cpp'
+            mutant.write_text(text.replace(old, new))
+            binary = compile_harness(self.work, mutant, f'fnkeys-mutant-{n}', (FNKEYS_FLAG,), (FNKEYS_FLAG,))
+            if all(run(str(binary), s).returncode == 0 for s in FNKEYS_SCENARIOS):
+                survivors.append(what)
+        self.assertEqual(survivors, [], 'Fn-key glue mutations the harness did not catch')
 
 
 def main():

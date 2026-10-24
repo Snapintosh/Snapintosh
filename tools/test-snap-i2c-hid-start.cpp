@@ -367,6 +367,234 @@ static SnapI2CHIDBus *ready_bus(const uint8_t *hid_desc, const uint8_t *rdesc, u
     return bus;
 }
 
+#if SNAP_I2C_HID_FNKEYS
+// ------------------------------------------------------------- Fn-key layer ----
+// Built with -DSNAP_I2C_HID_FNKEYS=1 (and hid-keyboard.o with it): the layer is off without the boot-arg
+// snap_i2c_fnkeys, and the keyboard is then exactly today's; with it, report 90 becomes macOS's usages, the raw log
+// names the F-row and hotkeys but never a character key and holds to its rate limit, report 90 stays ours while an
+// event driver holds the raw device, a refused boot-arg leaves the layer off and says why, and the bus names inputs
+// the transport refused only on the keyboard and only with the raw log.
+static SnapI2CHIDBus *fn_bus(bool set, uint32_t flags)
+{
+    standin.boot_args.clear();
+    if (set)
+        standin.boot_args["snap_i2c_fnkeys"] = flags;
+    SnapI2CHIDBus *kb = ready_bus(a16_eckb_hid_desc, a16_eckb_report_desc, sizeof(a16_eckb_report_desc));
+    kb->publish();
+    CHECK(kb->fKeyboard, "the keyboard service runs");
+    return kb;
+}
+static void fn_report(SnapI2CHIDBus *kb, std::vector<uint8_t> r)
+{
+    standin.now_ns += 8000000u;
+    kb->fKeyboard->handleReport(r.data(), (uint32_t)r.size());
+}
+static void fn_vendor(SnapI2CHIDBus *kb, uint8_t code) { fn_report(kb, {0x5a, code, 0, 0, 0, 0}); }
+static void fn_keys(SnapI2CHIDBus *kb, uint8_t mods, uint8_t key) { fn_report(kb, {0x36, mods, 0, key, 0, 0, 0, 0, 0}); }
+static void fn_consumer(SnapI2CHIDBus *kb, uint16_t u) { fn_report(kb, {0x37, (uint8_t)u, (uint8_t)(u >> 8)}); }
+static bool fn_events(size_t from, const std::vector<std::array<uint32_t, 3>> &want)
+{
+    bool same = standin.key_events.size() == from + want.size();
+    for (size_t i = 0; same && i < want.size(); i++) {
+        const auto &e = standin.key_events[from + i];
+        same = e.page == want[i][0] && e.usage == want[i][1] && e.value == want[i][2];
+    }
+    if (!same)
+        for (size_t i = from; i < standin.key_events.size(); i++)
+            printf("  event %zu: 0x%x/0x%x %u\n", i, standin.key_events[i].page, standin.key_events[i].usage,
+                   standin.key_events[i].value);
+    return same;
+}
+static size_t occurrences(const char *text)
+{
+    size_t n = 0;
+    for (size_t at = standin.log.find(text); at != std::string::npos; at = standin.log.find(text, at + 1))
+        n++;
+    return n;
+}
+static void fn_done(SnapI2CHIDBus *kb)
+{
+    kb->stop(kb->fProvider);
+    kb->release();
+}
+
+static bool fnkeys_scenario(const std::string &s)
+{
+    if (s == "fnkeys-off") {
+        const struct { bool set; uint32_t flags; const char *log; } cases[] = {
+            {false, 0, "fn keys: off (no snap_i2c_fnkeys boot-arg)"}, {true, 0, "fn keys: off (snap_i2c_fnkeys 0x0)"},
+            {true, 0x10, "fn keys: off (snap_i2c_fnkeys 0x10)"}};
+        for (const auto &c : cases) {
+            standin.log.clear();
+            standin.key_events.clear();
+            SnapI2CHIDBus *kb = fn_bus(c.set, c.flags);
+            CHECK(kb->fKeyboard->fFn.flags == 0 && logged(c.log), "the layer is off, and says so");
+            fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+            fn_consumer(kb, 0x70); fn_consumer(kb, 0);
+            fn_keys(kb, 0, 0x3e); fn_keys(kb, 0, 0);
+            CHECK(fn_events(0, {{12, 0x70, 1}, {12, 0x70, 0}, {7, 0x3e, 1}, {7, 0x3e, 0}}),
+                  "report 90 dispatches nothing, reports 55 and 54 as without the layer");
+            CHECK(standin.log.find("fn keys: report") == std::string::npos, "and nothing is raw-logged");
+            fn_done(kb);
+        }
+    } else if (s == "fnkeys-translate") {
+        SnapI2CHIDBus *kb = fn_bus(true, 0x1);
+        CHECK(logged("fn keys: snap_i2c_fnkeys 0x1: translate on, raw log off, host Fn-lock off; brightness down "
+                     "0x00ff/0x0005, up 0x00ff/0x0004; input report 90 6 bytes in the descriptor"),
+              "the start line names the flags, the brightness usages and the descriptor's report 90");
+        fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+        fn_vendor(kb, 0x20); fn_vendor(kb, 0);
+        fn_vendor(kb, 0x7c); fn_vendor(kb, 0);
+        fn_vendor(kb, 0x86); fn_vendor(kb, 0);                  // MyASUS: no macOS usage
+        fn_consumer(kb, 0x6f); fn_consumer(kb, 0xe9); fn_consumer(kb, 0);
+        fn_keys(kb, 0, 0x3e); fn_keys(kb, 0, 0);
+        CHECK(fn_events(0, {{0xff, 5, 1}, {0xff, 5, 0}, {0xff, 4, 1}, {0xff, 4, 0}, {1, 0xa9, 1}, {1, 0xa9, 0},
+                            {0xff, 4, 1}, {0xff, 4, 0}, {12, 0xe9, 1}, {12, 0xe9, 0}, {7, 0x3e, 1}, {7, 0x3e, 0}}),
+              "hotkeys and report 55's brightness as macOS's usages, F5 as F5");
+        CHECK(logged("keyboard dispatched 1 key transitions from 1 reports"), "progress is still counted");
+        CHECK(standin.log.find("fn keys: report") == std::string::npos && standin.log.find("0x3e") == std::string::npos,
+              "no raw log without its bit, and no key usage in the log");
+        fn_vendor(kb, 0x20);
+        size_t at = standin.key_events.size();
+        kb->stop(kb->fProvider);
+        CHECK(fn_events(at, {{0xff, 4, 0}}), "stop releases a held hotkey as what it was dispatched as");
+        kb->release();
+    } else if (s == "fnkeys-raw-log") {
+        SnapI2CHIDBus *kb = fn_bus(true, 0x3);
+        fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+        fn_vendor(kb, 0x6b); fn_vendor(kb, 0);
+        fn_keys(kb, 0, 0x3e); fn_keys(kb, 0, 0);
+        fn_consumer(kb, 0xe9); fn_consumer(kb, 0);
+        fn_keys(kb, 0x0a, 0x72); fn_keys(kb, 0, 0);
+        fn_keys(kb, 0x08, 0x13); fn_keys(kb, 0, 0);
+        fn_report(kb, {0x07, 1, 2, 3, 4});
+        CHECK(logged("fn keys: report 90 [5a 10 00 00 00 00]: code 0x10 down -> 0x00ff/0x0005") &&
+              logged("fn keys: report 90 [5a 00 00 00 00 00]: code 0x10 up -> 0x00ff/0x0005"),
+              "report 90's bytes and what each code became");
+        CHECK(logged("fn keys: report 90 [5a 6b 00 00 00 00]: code 0x6b down -> nothing"), "an unmapped code is named");
+        CHECK(logged("fn keys: report 54 key 0x3e down, modifiers 0x00 -> 0x0007/0x003e"), "an F-key is named");
+        CHECK(logged("fn keys: report 55 usage 0x00e9 down -> 0x000c/0x00e9"), "a Consumer usage is named");
+        CHECK(logged("fn keys: report 54 key 0x72 down past the logical maximum 0x65, modifiers 0x0a: not dispatched"),
+              "F23 (the Copilot key's) is named");
+        CHECK(logged("fn keys: report 54 chord: modifiers 0x08 and key 0x13 went down in one report"), "a chord is named");
+        CHECK(logged("fn keys: report 7, 5 bytes [07 01 02 03 04]: not taken"), "an unknown report is named");
+        size_t before = standin.log.size();
+        for (uint8_t k = 0x04; k <= 0x39; k++) {
+            fn_keys(kb, 0x02, k);
+            fn_keys(kb, 0, 0);
+        }
+        CHECK(standin.log.find("fn keys:", before) == std::string::npos, "typing leaves no raw-log line");
+        standin.log.clear();
+        const uint8_t press[6] = {0x5a, 0x10, 0, 0, 0, 0}, none[6] = {0x5a, 0, 0, 0, 0, 0};
+        for (int i = 0; i < 200; i++) {                         // in one instant
+            kb->fKeyboard->handleReport(press, 6);
+            kb->fKeyboard->handleReport(none, 6);
+        }
+        CHECK(occurrences("fn keys: report 90") <= HID_FNKEYS_RATE_BURST, "a flood is cut to the burst");
+        standin.now_ns += 1000000000ull;
+        fn_vendor(kb, 0x20);
+        CHECK(logged("raw-log lines dropped by the rate limit") && logged("code 0x20 down"),
+              "and the next allowed line says how many were dropped");
+        CHECK(fn_events(standin.key_events.size() - 1, {{0xff, 4, 1}}), "dispatching is never rate-limited");
+        fn_done(kb);
+    } else if (s == "fnkeys-yield") {
+        SnapI2CHIDBus *kb = fn_bus(true, 0x1);
+        IOService *dk = new IOService;
+        dk->meta.name = "AppleUserHIDEventService";
+        G.nack_commands = true;                                 // the steps' own polls fail at once
+        fn_consumer(kb, 0x70);                                  // brightness down held when the driver takes over
+        CHECK(fn_events(0, {{0xff, 5, 1}}), "report 55's brightness, translated");
+        CHECK(kb->fHID->handleOpen(dk, 0, nullptr), "an event driver opens the raw device");
+        kb->step();
+        CHECK(!strcmp(kb->fKeyboard->state(), "yielded") && fn_events(1, {{0xff, 5, 0}}),
+              "yielding releases it as what it was dispatched as");
+        fn_keys(kb, 0, 0x04); fn_keys(kb, 0, 0);
+        fn_consumer(kb, 0x6f); fn_consumer(kb, 0);
+        CHECK(fn_events(2, {}), "reports 54 and 55 are the event driver's");
+        fn_vendor(kb, 0x20); fn_vendor(kb, 0);
+        CHECK(fn_events(2, {{0xff, 4, 1}, {0xff, 4, 0}}), "report 90 is still ours");
+        kb->fHID->handleClose(dk, 0);
+        kb->step();
+        fn_keys(kb, 0, 0x04); fn_keys(kb, 0, 0);
+        CHECK(fn_events(4, {{7, 4, 1}, {7, 4, 0}}), "closed, the keyboard dispatches again");
+        dk->release();
+        fn_done(kb);
+    } else if (s == "fnkeys-host-lock") {
+        SnapI2CHIDBus *kb = fn_bus(true, 0x7);
+        fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+        fn_vendor(kb, 0x4e); fn_vendor(kb, 0);
+        CHECK(logged("fn keys: host Fn-lock on: F1-F12 first, hotkeys with Fn"), "Fn+Esc turns the host lock on");
+        fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+        fn_keys(kb, 0, 0x3e); fn_keys(kb, 0, 0);
+        fn_vendor(kb, 0x4e); fn_vendor(kb, 0);
+        CHECK(logged("fn keys: host Fn-lock off: hotkeys first, F1-F12 with Fn"), "and off again");
+        fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+        CHECK(fn_events(0, {{0xff, 5, 1}, {0xff, 5, 0}, {7, 0x3e, 1}, {7, 0x3e, 0}, {0xff, 5, 1}, {0xff, 5, 0},
+                            {0xff, 5, 1}, {0xff, 5, 0}}),
+              "locked, the brightness key is F5 and Fn+F5 brightness");
+        fn_done(kb);
+    } else if (s == "fnkeys-bootarg") {
+        const struct { uint32_t flags; const char *log; uint32_t page, usage; } cases[] = {
+            {0x40, "fn keys: snap_i2c_fnkeys 0x40 refused (unknown bits); off", 0, 0},
+            {0x19, "fn keys: snap_i2c_fnkeys 0x19 refused (brightness encoding 3); off", 0, 0},
+            {0x04, "fn keys: snap_i2c_fnkeys 0x4 refused (host lock without translate); off", 0, 0},
+            {0x09, "brightness down 0xff01/0x0021, up 0xff01/0x0020", 0xff01, 0x21},
+            {0x11, "brightness down 0x000c/0x0070, up 0x000c/0x006f", 0x0c, 0x70},
+        };
+        for (const auto &c : cases) {
+            standin.log.clear();
+            standin.key_events.clear();
+            SnapI2CHIDBus *kb = fn_bus(true, c.flags);
+            CHECK(logged(c.log), "the start line");
+            fn_vendor(kb, 0x10); fn_vendor(kb, 0);
+            CHECK(c.page ? fn_events(0, {{c.page, c.usage, 1}, {c.page, c.usage, 0}}) : fn_events(0, {}),
+                  "a refused boot-arg leaves the layer off; an encoding picks the brightness usages");
+            fn_done(kb);
+        }
+    } else if (s == "fnkeys-rejected") {
+        static const uint8_t unknown[] = {0x07, 0x00, 0x40, 0x01, 0x02, 0x03, 0x04};
+        static const uint8_t short54[] = {0x0a, 0x00, 0x36, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00};
+        SnapI2CHIDBus *kb = fn_bus(true, 0x3);
+        struct i2c_hid_dev *d = kb->fDev;
+        memcpy(d->rejected, unknown, sizeof(unknown));
+        d->rejected_len = 64;
+        d->stats.unknown_id++;
+        kb->noteRejectedInput();
+        CHECK(logged("fn keys: transport refused an input: length prefix 7, report 64 [40 01 02 03 04]"),
+              "an input the transport refused is named by the bus");
+        size_t n = standin.log.size();
+        kb->noteRejectedInput();
+        CHECK(standin.log.size() == n, "once per refusal");
+        memset(d->rejected, 0, sizeof(d->rejected));
+        memcpy(d->rejected, short54, sizeof(short54));
+        d->stats.wrong_size++;
+        kb->noteRejectedInput();
+        CHECK(logged("length prefix 10, report 54 (bytes withheld)") &&
+              standin.log.find("36 00 00 04") == std::string::npos, "a keyboard report by its size only");
+        fn_done(kb);
+        standin.log.clear();
+        kb = fn_bus(true, 0x1);                                 // translate only: not named
+        memcpy(kb->fDev->rejected, unknown, sizeof(unknown));
+        kb->fDev->rejected_len = 64;
+        kb->fDev->stats.unknown_id++;
+        kb->noteRejectedInput();
+        SnapI2CHIDBus *tp = ready_bus(a16_tpad_hid_desc, a16_tpad_report_desc, sizeof(a16_tpad_report_desc));
+        tp->publish();
+        memcpy(tp->fDev->rejected, unknown, sizeof(unknown));
+        tp->fDev->rejected_len = 52;
+        tp->fDev->stats.unknown_id++;
+        tp->noteRejectedInput();                                // the touchpad's bus has no keyboard
+        CHECK(standin.log.find("transport refused") == std::string::npos, "without the raw log or a keyboard: nothing");
+        tp->stop(tp->fProvider);
+        tp->release();
+        fn_done(kb);
+    } else {
+        return false;
+    }
+    return true;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     std::string s = argc > 1 ? argv[1] : "";
@@ -1020,6 +1248,13 @@ int main(int argc, char **argv)
         bus->fTimer->release();
         IOFree(bus->fDev, sizeof(*bus->fDev));
         bus->fDev = nullptr;
+#endif
+#if SNAP_I2C_HID_FNKEYS
+    } else if (s.compare(0, 7, "fnkeys-") == 0) {
+        if (!fnkeys_scenario(s)) {
+            printf("unknown scenario %s\n", s.c_str());
+            return 2;
+        }
 #endif
     } else {
         printf("unknown scenario %s\n", s.c_str());
