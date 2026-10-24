@@ -21,7 +21,10 @@
    (kernel, IOMobileGraphicsFamily, IOAVFamily, IOSurface, IOGPUFamily).
 
 Writes <out>/iomfb-vtable-check.json (the full per-slot table) and exits 1 on any failure.
-Usage: tools/check-iomfb-vtable.py [--out DIR] [--kc PATH] [--kdk PATH] [--no-display] [--display-define NAME=V ...]
+Usage: tools/check-iomfb-vtable.py [--out DIR] [--kc PATH] [--kdk PATH] [--no-display] [--display-define NAME[=V] ...]
+--display-define (alias --define) compiles AdrenoDisplay.cpp, and only it, with that define too: a profile's
+AdrenoDisplay set, or an opt-in override such as ADRENO_DISPLAY_TRACE_MODES=1 or ADRENO_BACKLIGHT=1 (whose
+set_brightness_gated override must then pass the same slot check); without it the default build is checked.
 """
 import argparse
 import hashlib
@@ -199,9 +202,10 @@ def main():
     ap.add_argument('--kdk', type=Path, default=gen.DEFAULT_KDK)
     ap.add_argument('--kc', type=Path, default=gen.DEFAULT_KC)
     ap.add_argument('--no-display', action='store_true', help='check only the stub subclass')
-    ap.add_argument('--display-define', action='append', default=[], metavar='NAME[=VALUE]',
-                    help='a -D for AdrenoDisplay.cpp only, repeatable (e.g. a profile\'s AdrenoDisplay set, or '
-                         'ADRENO_DISPLAY_TRACE_MODES=1, whose overrides add slots to check)')
+    ap.add_argument('--display-define', '--define', dest='display_define', action='append', default=[],
+                    metavar='NAME[=VALUE]',
+                    help='a -D for AdrenoDisplay.cpp only, repeatable (e.g. a profile\'s AdrenoDisplay set, '
+                         'ADRENO_DISPLAY_TRACE_MODES=1 or ADRENO_BACKLIGHT=1, whose overrides add slots to check)')
     args = ap.parse_args()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)

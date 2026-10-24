@@ -272,6 +272,17 @@ def parse(argv=None):
                         'submission is in the kext. SnapI2CHID polls every 4 ms while touched, timed from the previous '
                         'poll\'s start. The release hold is off by default since b12v11. Kext only; give it to every '
                         'mode of the attempt')
+    p.add_argument('--edp-backlight', action='store_true',
+                   help='opt-in panel brightness (agents/brightness; needs --present-latch and its chain): monitor define '
+                        'SNAP_EDP_BACKLIGHT (ADRENO_GUEST_BACKLIGHT: the panel\'s DPCD backlight level over the eDP '
+                        'AUX channel, clamped to [10%% of full scale, the panel\'s maximum], fail closed), the AuxKC '
+                        'INPUT_AUXKC_DESKTOP_BACKLIGHT (AdrenoBacklight, the backlight service CoreBrightness drives) and '
+                        'guest boot-arg adreno_backlight=1; give it to every mode of the attempt')
+    p.add_argument('--edp-backlight-mode', action='store_true',
+                   help='with --edp-backlight: guest boot-arg adreno_backlight_mode=1, letting the first brightness '
+                        'change switch a panel the firmware left in PWM-pin mode to DPCD control (level written first, '
+                        'only the two mode bits changed, read back; on failure the old mode is restored and the '
+                        'monitor stops)')
     p.add_argument('--present-latch-us', type=int, default=None,
                    help='with --present-latch: guest boot-arg adreno_latch_us, the slack kept before row 0 (default '
                         '3000; 0 = the beam kext\'s aim before the vblank)')

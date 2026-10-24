@@ -455,6 +455,11 @@ struct context {
      * monitor arena pages taken at setup (owner 0, never released). */
     struct guest_net_state *guest_net;
 #endif
+#if SNAP_EDP_BACKLIGHT
+    /* compat/edp-backlight.h: ADRENO_GUEST_BACKLIGHT's state, one monitor
+     * arena page taken at setup (owner 0, never released). */
+    struct edp_backlight_state *edp_backlight;
+#endif
 #if SNAP_FAST_EL0_SYSREG || SNAP_SERVICE_SUBCLASS
     /* Appended only under these opt-in defines, inside the page before the
      * table arena (asserted below), so define-free layout readers keep every

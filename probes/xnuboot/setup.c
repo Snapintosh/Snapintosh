@@ -91,6 +91,14 @@ int xnuboot_setup(uint64_t work, uint64_t size, uint64_t params, uint64_t out,
     __asm__ volatile("" ::: "memory");
     c->next_table += GUEST_NET_STATE_PAGES * 4096;
 #endif
+#if SNAP_EDP_BACKLIGHT
+    /* compat/edp-backlight.h: one page, zeroed (EDP_BL_STATE_UNPROBED), probed by the first guest call. */
+    if (c->next_table + 4096 > c->work_end) return 1;
+    c->edp_backlight = (struct edp_backlight_state *)c->next_table;
+    for (uint64_t n = 0; n < 4096 / 8; n++) ((volatile uint64_t *)c->edp_backlight)[n] = 0;
+    __asm__ volatile("" ::: "memory");
+    c->next_table += 4096;
+#endif
     if(c->params->early_stop.flags & EARLY_STOP_F_THERMAL) {
         if(c->next_table>c->work_end || c->work_end-c->next_table<4096)return 1;
         c->thermal=(struct a16_thermal_state *)c->next_table;

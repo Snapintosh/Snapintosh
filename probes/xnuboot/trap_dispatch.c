@@ -578,6 +578,12 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
                 return 0;
             }
 #endif
+#if SNAP_EDP_BACKLIGHT
+            if (frame[0] == ADRENO_GUEST_BACKLIGHT) {
+                edp_backlight_hvc(c, frame, *elr, physical_spsr);
+                return 0;
+            }
+#endif
 #if SNAP_ADRENO_IB_ASYNC
             if (frame[0] == ADRENO_GUEST_IB_POLL) {
                 gpu_ib_poll_hvc(c, frame, *elr);

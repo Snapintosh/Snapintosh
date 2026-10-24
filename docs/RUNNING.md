@@ -143,6 +143,7 @@ The flags fall into these groups:
 | Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us` |
 | Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline` |
 | GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--gpu-x290-survey` |
+| Panel brightness | `--edp-backlight`, `--edp-backlight-mode` |
 | Clocks and bandwidth | `--thermal-guard`, `--gpu-dvfs`, `--gpu-dvfs-ceiling`, `--cpu-dvfs`, `--ddr-vote`, `--llcc`, `--bw-probe` |
 | Storage | `--nvme-async`, `--nvme-converted` |
 | Wi-Fi | `--qcc2072-wifi`, `--qcc2072-auxkc`, `--qcc2072-auxkc-sha256` |
@@ -185,6 +186,22 @@ after that test passed and with the boot-arg `adreno_coherent=1` the flag adds.
 The flag also runs q1n1's `a16gpu adopt --coherent`, which needs a q1n1 checkout
 that has that option. `--gpu-coherent-force` is a debug build without the
 self-test, for A/B rendering checks only.
+
+`--edp-backlight` (needs `--present-latch` and its chain) lets macOS set the
+panel's brightness. The monitor gets `SNAP_EDP_BACKLIGHT`: its
+`ADRENO_GUEST_BACKLIGHT` call writes the panel's DPCD backlight level over the
+eDP controller's AUX channel, touching only the AUX transport registers and
+DPCD `0x721`-`0x723`, clamping the level to between 10% of full scale and the
+panel's maximum, and stopping for the boot on any failure with the brightness
+left as it was (`compat/edp-backlight.h`, event `EV_EDP_BACKLIGHT`). The guest
+gets AdrenoX2's `desktop-backlight` profile, whose `AdrenoBacklight` service is
+what CoreBrightness drives, and the boot-arg `adreno_backlight=1`. The AuxKC
+must be built (`KEXT_PROFILE=desktop-backlight tools/build-auxkc-desktop.sh
+NAME`) and pinned as `INPUT_AUXKC_DESKTOP_BACKLIGHT`; until then the flag is
+refused. `--edp-backlight-mode` lets the first change switch a panel left in
+PWM-pin mode to DPCD control. `tools/survey-edp-aux.py` checks, read-only from
+q1n1, that the clocks and the AUX controller the call needs are on.
+`tools/test-edp-backlight.py` is the offline test.
 
 ## Installing a new Metal plug-in
 

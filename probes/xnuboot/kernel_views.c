@@ -577,6 +577,10 @@ static int txn_publish_exclude(void *ctx,uint64_t page)
     /* The guest-network state, stored the same way (compat/guest-net-link.h). */
     if(page>=(uint64_t)c->guest_net && page-(uint64_t)c->guest_net<GUEST_NET_STATE_PAGES*4096)return 1;
 #endif
+#if SNAP_EDP_BACKLIGHT
+    /* ADRENO_GUEST_BACKLIGHT's state page, stored the same way (compat/edp-backlight.h). */
+    if(page==(uint64_t)c->edp_backlight)return 1;
+#endif
     for(unsigned cpu=0;cpu<GUEST_CPU_COUNT;cpu++)
         for(uint64_t g=0;g<c->vcpus[cpu].guard_count;g++)
             if((c->vcpus[cpu].guards[g].slot&~UINT64_C(4095))==page)return 1;

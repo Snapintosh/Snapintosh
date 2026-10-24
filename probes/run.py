@@ -128,7 +128,8 @@ MULTI = {'pauth-address': ['probes/pauth-address.S','compat/pauth-native.S'],
                      'compat/adreno.c', 'compat/adreno-fill.c', 'compat/adreno-ib.c', 'compat/irq-forward.c', 'compat/ans.c', 'compat/ans-window.c', 'compat/nvme-host.c', 'compat/early-stop.c', 'compat/a16-thermal.c', 'probes/memory.S']}
 # Units linked only when their opt-in define is in FLAGS, after MULTI's, so a build without the define links exactly
 # the objects it always did and its ELF stays byte-identical.
-OPTIONAL = {'xnuboot': (('-DSNAP_ADRENO_COHERENT=1', 'compat/adreno-coherent.c'),)}
+OPTIONAL = {'xnuboot': (('-DSNAP_ADRENO_COHERENT=1', 'compat/adreno-coherent.c'),
+                        ('-DSNAP_EDP_BACKLIGHT=1', 'compat/edp-backlight.c'))}
 
 
 def optional_sources(name, flags):

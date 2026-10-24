@@ -652,3 +652,46 @@ static void guest_net_hvc(struct context *c, uint64_t *frame, uint64_t elr, uint
 }
 #endif
 
+#if SNAP_EDP_BACKLIGHT
+/* compat/edp-backlight.c reaches the eDP controller and dispcc through these, physical addresses in q1n1's EL2
+ * identity map (Device memory, as the thermal guard's reads). The engine admits only its allow-list
+ * (edp_bl_mmio_read_ok/edp_bl_mmio_write_ok, proven by tools/test-edp-backlight.c); the barrier orders each access
+ * before the next, as the controller's FIFO protocol needs. */
+static int edp_backlight_read(void *ctx, uint64_t pa, uint32_t *value)
+{
+    (void)ctx;
+    *value = *(const volatile uint32_t *)pa;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 0;
+}
+static int edp_backlight_write(void *ctx, uint64_t pa, uint32_t value)
+{
+    (void)ctx;
+    *(volatile uint32_t *)pa = value;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 0;
+}
+static uint64_t edp_backlight_clock(void *ctx) {(void)ctx; return service_profile_clock();}
+
+/* ADRENO_GUEST_BACKLIGHT (compat/edp-backlight.h): admitted from EL1 for the HVC the loaded AuxKC's own bytes hold
+ * (early_stop_guest_caller, as ADRENO_GUEST_STOP). Under the service lock: one AUX transaction at a time, each
+ * bounded by hz / EDP_BL_AUX_BUDGET_DIV. */
+static void edp_backlight_hvc(struct context *c, uint64_t *frame, uint64_t elr, uint64_t spsr)
+{
+    const struct params *p = c->params;
+    const struct edp_backlight_io io = {c, edp_backlight_read, edp_backlight_write, edp_backlight_clock,
+                                        p->clock_host_hz};
+    uint64_t hvc = elr - 4, pa = guest_pa(hvc), r[4] = {frame[0], frame[1], frame[2], frame[3]};
+    uint32_t word = 0;
+    if (pa && p->auxkc.pa_end > p->auxkc.pa_base + 4 && pa >= p->auxkc.pa_base && pa <= p->auxkc.pa_end - 4)
+        word = *(volatile uint32_t *)pa;
+    if (early_stop_guest_caller(&p->auxkc, hvc, pa, word, spsr)) {
+        r[0] = (uint64_t)(int64_t)EDP_BL_E_ORIGIN;
+        r[1] = r[2] = r[3] = 0;
+    } else
+        edp_backlight_call(c->edp_backlight, &io, r);
+    record(c, EV_EDP_BACKLIGHT, hvc, frame[1] << 32 | (uint32_t)frame[2], r[0] << 32 | (uint32_t)r[3], r[1]);
+    for (unsigned n = 0; n < 4; n++) frame[n] = r[n];
+}
+#endif
+
