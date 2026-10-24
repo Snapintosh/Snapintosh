@@ -18,6 +18,7 @@ sys.dont_write_bytecode = True
 
 import argparse
 import json
+import os
 import traceback
 from pathlib import Path
 
@@ -30,6 +31,72 @@ def emit(result):
                      default=lambda o: hex(o) if isinstance(o, int) else str(o)), flush=True)
 
 
+def render_dashboard(ws, no_color=False):
+    use_color = (sys.stdout.isatty() or os.environ.get('FORCE_COLOR') == '1') and not no_color
+    BOLD = '\033[1m' if use_color else ''
+    CYAN = '\033[36m' if use_color else ''
+    GREEN = '\033[32m' if use_color else ''
+    YELLOW = '\033[33m' if use_color else ''
+    RESET = '\033[0m' if use_color else ''
+
+    from cycle_lib import status
+    from cycle_lib.common import PINS_PATH, hardware_clients
+
+    print(f"\n{BOLD}{CYAN}╔══════════════════════════════════════════════════════════════════╗{RESET}")
+    print(f"{BOLD}{CYAN}║                  Snapintosh A16 Cycle Dashboard                  ║{RESET}")
+    print(f"{BOLD}{CYAN}╚══════════════════════════════════════════════════════════════════╝{RESET}\n")
+
+    is_custom = PINS_PATH.name == 'pins.json'
+    pins_label = f"{GREEN}pins.json (Custom configured){RESET}" if is_custom else f"{YELLOW}pins.example.json (Default template){RESET}"
+    print(f"  {BOLD}Configuration:{RESET} {pins_label}")
+    print(f"  {BOLD}Target Machine:{RESET} ASUS Zenbook A16 (UX3607OA / X2E-96-100)")
+    print(f"  {BOLD}Guest Target:{RESET}   Apple macOS 27 (26A428 stock J700 kernel)")
+
+    expect = status.expected(ws)
+    print(f"\n{BOLD}── Workspace State ──{RESET}")
+    if expect:
+        gen = expect.get('generation', 'unknown')
+        img_base = expect.get('image_base', 'unknown')
+        print(f"  {BOLD}Expected Generation:{RESET} {GREEN}{gen}{RESET} (slot {img_base})")
+        if 'launch' in expect:
+            print(f"  {BOLD}Last Launch Record:{RESET}   {Path(expect['launch']).name}")
+        if 'retirement' in expect:
+            print(f"  {BOLD}Last Retirement:{RESET}     {Path(expect['retirement']).name}")
+    else:
+        print(f"  {YELLOW}No completed launch or retirement records in build/{RESET}")
+
+    clients = hardware_clients(ws)
+    print(f"\n{BOLD}── Hardware Concurrency ──{RESET}")
+    if clients:
+        print(f"  {YELLOW}⚠ Active clients:{RESET} {len(clients)} process(es) holding hardware lock:")
+        for c in clients:
+            print(f"    - PID {c['pid']}: {c['command']}")
+    else:
+        print(f"  {GREEN}✓ Hardware link available{RESET} (0 active clients)")
+
+    print(f"\n{BOLD}── Recommended Next Step ──{RESET}")
+    next_cmd = status.next_step(ws)
+    for line in next_cmd.strip().splitlines():
+        if line.startswith('#'):
+            print(f"  {YELLOW}{line}{RESET}")
+        else:
+            print(f"  {BOLD}{CYAN}> {line}{RESET}")
+    print("")
+
+
+def render_pretty_status(res):
+    print(f"\nStatus: {res.get('status')}")
+    if 'stage_generation' in res:
+        print(f"Generation: {res.get('stage_generation')} (EL{res.get('current_el', '?')})")
+        print(f"Image Base: {res.get('image_base')}")
+    if 'battery' in res:
+        bat = res['battery']
+        print(f"Battery:    {bat.get('percent')}% (AC: {bat.get('ac')}, Plausible: {bat.get('plausible')})")
+    if 'hardware_clients' in res:
+        print(f"Clients:    {len(res['hardware_clients'])} active")
+    print("")
+
+
 def parse(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='command', required=True)
@@ -37,6 +104,13 @@ def parse(argv=None):
     p = sub.add_parser('status', help='one read-only proxy query: generation, EL, image base, SError, battery')
     p.add_argument('--check', action='store_true')
     p.add_argument('--battery-minimum', type=int)
+    p.add_argument('--pretty', action='store_true', help='human-readable formatted output')
+
+    p = sub.add_parser('dashboard', help='visual summary of current workspace, A16 records, and next step')
+    p.add_argument('--no-color', action='store_true', help='disable ANSI color output')
+
+    p = sub.add_parser('init-pins', help='initialize or inspect tools/cycle_lib/pins.json from example template')
+    p.add_argument('--force', action='store_true', help='overwrite existing pins.json')
 
     p = sub.add_parser('capture', help='run the stopped-state steps a finished launch still needs')
     p.add_argument('--prefix', required=True)
@@ -688,7 +762,23 @@ def main(argv=None):
             return installed_fresh.main(ws, args)
         elif args.command == 'status':
             from cycle_lib import status
-            emit(status.status(ws, args.check, args.battery_minimum))
+            res = status.status(ws, args.check, args.battery_minimum)
+            if getattr(args, 'pretty', False):
+                render_pretty_status(res)
+            else:
+                emit(res)
+        elif args.command == 'dashboard':
+            render_dashboard(ws, args.no_color)
+            return 0
+        elif args.command == 'init-pins':
+            pins_path = ws.root / 'tools/cycle_lib/pins.json'
+            example_path = ws.root / 'tools/cycle_lib/pins.example.json'
+            if pins_path.exists() and not args.force:
+                print(f"pins.json already exists at {pins_path}. Use --force to overwrite.", flush=True)
+                return 0
+            pins_path.write_bytes(example_path.read_bytes())
+            print(f"✓ Initialized {pins_path} from pins.example.json. Set device UDP interface for your machine.", flush=True)
+            return 0
         elif args.command == 'next':
             from cycle_lib import status
             print(status.next_step(ws), flush=True)
