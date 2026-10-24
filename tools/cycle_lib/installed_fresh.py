@@ -318,10 +318,17 @@ QCC2072_INPUTS = 'qcc2072-inputs'        # under the attempt's directory: the th
 # no CP_MEMCPY over 1 MiB, after b12v13's 4 MiB copy latched the GPU); the pipeline set remains as ADDITIONS_PIPELINE.
 # Mirror-slab set (agents/gpu-perf FAILURE-MODES.md R): the pipeline2 rows plus the executable 933060b2 (UBO mirror regions
 # from slabs allocated once and never released); the pipeline2 set remains for rollback as ADDITIONS_PIPELINE2.
-ADDITIONS = 'build/current-assets/metal-stage-mirrorslab-20261021/trust-additions.json'
-ADDITIONS_SHA = '4802847aef13e6e46ebc50cd03b1e35ebafe929d5ae46f44f4de6a8d4fb64ae7'
-TRUST_PAYLOAD = 'build/current-assets/metal-stage-mirrorslab-20261021/trustcache.payload'
-TRUST_SHA = 'fb429aa20cea252f321d3b4ff18d7bc9425c10babb391d370315c9de5b4ff50f'
+# Settings-icons set (SnapMetal ADRENO_SETTINGS_ICONS): the mirror-slab rows plus the executable c76a4677 (CoreImage
+# compute kernels sampling sRGB and grey+alpha images; multi-input kernels behind AdrenoIBComputeSamplers), deployed by
+# tools/deploy-guest-plugin.py; the mirror-slab set remains for rollback as ADDITIONS_MIRRORSLAB.
+ADDITIONS = 'build/current-assets/metal-stage-settingsicons-20261024/trust-additions.json'
+ADDITIONS_SHA = 'cdc784df778f7544fac5b2c774c3b6ee49cc70a15670301f3c4515dfed5562ff'
+TRUST_PAYLOAD = 'build/current-assets/metal-stage-settingsicons-20261024/trustcache.payload'
+TRUST_SHA = '247598bc2b4b48c31124e6dde3b83a52b41aa59355f697416cec0e8420926636'
+ADDITIONS_MIRRORSLAB = 'build/current-assets/metal-stage-mirrorslab-20261021/trust-additions.json'
+ADDITIONS_MIRRORSLAB_SHA = '4802847aef13e6e46ebc50cd03b1e35ebafe929d5ae46f44f4de6a8d4fb64ae7'
+TRUST_PAYLOAD_MIRRORSLAB = 'build/current-assets/metal-stage-mirrorslab-20261021/trustcache.payload'
+TRUST_SHA_MIRRORSLAB = 'fb429aa20cea252f321d3b4ff18d7bc9425c10babb391d370315c9de5b4ff50f'
 ADDITIONS_PIPELINE2 = 'build/current-assets/metal-stage-pipeline2-20261021/trust-additions.json'
 ADDITIONS_PIPELINE2_SHA = 'eb035ef6ff2a380ece5ace3eddd9d9bc1365d9a8a478ba25ede795d8ccf5e119'
 TRUST_PAYLOAD_PIPELINE2 = 'build/current-assets/metal-stage-pipeline2-20261021/trustcache.payload'
