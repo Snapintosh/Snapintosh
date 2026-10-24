@@ -205,17 +205,27 @@ CONSOLE_OFFSET = LOG_OFFSET + LOG_BYTES
 # fault, it would write into the shadow tables the hardware is walking, and the
 # failure would look like a page-table bug anywhere in the run.
 # tools/test-classify.py checks the whole report fits.
-CODE_AT = 0x400000
-# 448 KiB for probe code since native tables 3b: phase 3b's monitor is 320,526
-# bytes and the lock-free trap paths add 6,288, which left under 1 KiB of the
-# previous 320 KiB (itself raised from 256 KiB for the ANS2 M2 monitor,
-# docs/ANS2-M2-20260925.md). Only the report moves: it stays below the SMP
-# configuration page, which stays below WORK_AT. q1n1's heap, CODE_AT,
-# SECONDARY_CONFIG_AT and WORK_AT are unchanged, the monitor binary does not
-# change (the report address is passed at setup), and every consumer reads the
-# report through run.OUT_AT (tools/test-monitor-reservation.py).
-OUT_AT = 0x470000          # heap_base + this; 448 KiB reserved for probe code
+# 464 KiB for probe code since SNAP_VIEW_RECLAIM: the next1 qualification's
+# monitor (--edp-backlight) was 458,552 bytes, 200 short of the previous
+# 448 KiB, and the reclaim adds 1,352 (with VIEWRCL1). CODE_AT moves down
+# 16 KiB instead of OUT_AT up: the report ends exactly where the stopped-probe
+# scratch begins (heap+0x480000, tools/probe-a16-cpus.py), which
+# tools/secondary-runtime.py collect writes after the monitor returns and
+# before this file reads the report, so a higher report would lose its tail
+# (thermal and DVFS records). Below CODE_AT nothing in q1n1's heap is in use
+# during a run; the only other user of that range is the fresh-stage
+# qualification of tools/qualify-txm-image4-native.py (heap+0x100000, 3 MiB).
+# 448 KiB came from native tables 3b (phase 3b's monitor is 320,526 bytes and
+# the lock-free trap paths add 6,288, over the previous 320 KiB, itself raised
+# from 256 KiB for the ANS2 M2 monitor, docs/ANS2-M2-20260925.md) by moving
+# OUT_AT. The report, SECONDARY_CONFIG_AT and WORK_AT are unchanged, the
+# monitor binary does not depend on its load address, and every consumer reads
+# the code through run.CODE_AT and the report through run.OUT_AT
+# (tools/test-monitor-reservation.py).
+CODE_AT = 0x3fc000
+OUT_AT = 0x470000          # heap_base + this; 464 KiB reserved for probe code
 REPORT_RESERVE = 0x10000   # includes metrics for all 24 descriptor slots
+STOPPED_PROBE_AT = 0x480000     # stopped-probe scratch, from the report's end (tools/probe-a16-cpus.py)
 SECONDARY_CONFIG_AT = 0x4f0000  # the SMP secondaries' configuration page (tools/secondary-runtime.py)
 WORK_AT = 0x500000         # generic probe scratch; xnuboot stores its work locator here
 # The report must end before the next thing in the heap, the SMP configuration page.
@@ -1789,6 +1799,16 @@ def run_xnuboot(proxy, info, code, guest_profile='j700ap-26A428',
     early_record = early_names.decode(proxy.readmem(out + EARLY_STOP_OFFSET, early_names.SIZE))
     for line in early_names.summary(early_record, host.timer_hz):
         print(f'  {line}')
+    if '-DSNAP_VIEW_RECLAIM=1' in FLAGS:
+        perf = runpy.run_path(str(ROOT/'tools/perf_counters.py'))
+        offset, size = perf['view_reclaim_spec']()
+        try:
+            views = perf['decode_view_reclaim'](proxy.readmem(out + offset, size))
+            print(f"  kernel views: {views['count']} of {views['capacity']} tables (high water "
+                  f"{views['high_water']}), {views['reclaims']} reclaims retired {views['retired']}, "
+                  f"{views['full']} refused with nothing to retire")
+        except ValueError as error:
+            print('  kernel views record unreadable:', error)
     thermal_record = None
     if early is not None and early.thermal:
         thermal_names = runpy.run_path(str(ROOT/'tools/a16_thermal.py'))

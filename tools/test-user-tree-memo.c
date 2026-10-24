@@ -500,7 +500,7 @@ static void random_cases(unsigned rounds,unsigned steps)
 int main(void)
 {
     CHECK(sizeof(struct sprr_table_memo)==32+112+8*SPRR_TABLE_MEMO_PAGES);
-    CHECK(sizeof(struct sprr_view_memo)==24+96+16);
+    CHECK(sizeof(struct sprr_view_memo)==24+96+8*(SPRR_VIEW_TABLES/64));
     deterministic_cases();
     shared_source_case();
     unnoted_cases();

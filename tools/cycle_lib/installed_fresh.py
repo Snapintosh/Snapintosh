@@ -673,6 +673,10 @@ GPU_COHERENT_FORCE_DEFINE = '-DSNAP_ADRENO_COHERENT_FORCE=1'
 # flag adds. Monitor define only (no loader change). Appended after every earlier flag; off, the monitor is
 # byte-identical.
 EDP_BACKLIGHT_DEFINE = '-DSNAP_EDP_BACKLIGHT=1'
+# --view-reclaim (agents/view-reclaim): shadow/sprr-view.h SNAP_VIEW_RECLAIM, a 256-table kernel view pool and the
+# reclaim of copies no protected leaf needs when a protecting RETYPE finds it full (next1 stopped at 128, exit 7).
+# Monitor define only (no loader change). Appended after every earlier flag; off, the monitor is byte-identical.
+VIEW_RECLAIM_DEFINE = '-DSNAP_VIEW_RECLAIM=1'
 # agents/dvfs (FAILURE-MODES.md): opt-in governors on vCPU 0's locked tick, state at the end of root_ext (so
 # --root-cache-wide), report DVFSREP1 after the thermal record, restored at the stop; both need --thermal-guard (they
 # never write without the guard's readings). compat/cpu-dvfs.h SNAP_CPU_DVFS: SCMI PERF LEVEL_SET fastchannels of the
@@ -1096,6 +1100,8 @@ def variant_flags(sets, args, variant=None):
         flags.append(GPU_COHERENT_FORCE_DEFINE)
     if getattr(args, 'edp_backlight', False):
         flags.append(EDP_BACKLIGHT_DEFINE)
+    if getattr(args, 'view_reclaim', False):
+        flags.append(VIEW_RECLAIM_DEFINE)
     return flags
 
 

@@ -99,8 +99,22 @@ static int add(struct sprr_views *v,const struct shadow *s,uint64_t source,unsig
     if(found>=0)return v->tables[found].level==level;
     if(v->count>=SPRR_VIEW_TABLES || !source || (source&4095) || level>3)return 0;
     struct sprr_view_table *t=&v->tables[v->count];
+#if SNAP_VIEW_RECLAIM
+    /* Pages still waiting for sprr_views_reclaim's invalidation stay unused. */
+    if(t->level)return 0;
+#endif
     for(unsigned cpu=0;cpu<SPRR_VIEW_CPUS;cpu++) {
+#if SNAP_VIEW_RECLAIM
+        /* A retired set, or pages a failed add kept: no CPU can reach them
+         * any more, and they pass the same alias checks as fresh pages. The
+         * next sync stores every word that differs from its translation
+         * before a parent links them, and the publication rows mark every
+         * position at or past their count, so the whole page is cleaned
+         * before the next TLBI. */
+        uint64_t pa=t->copy[cpu] ? t->copy[cpu] : shadow_alloc_page(s);
+#else
         uint64_t pa=shadow_alloc_page(s);
+#endif
         if(!pa || (pa&4095) || pa==source)return 0;
         for(unsigned n=0;n<v->count;n++) {
             if(pa==v->tables[n].source)return 0;
@@ -144,6 +158,13 @@ static int prepare_path(struct sprr_views *v,const struct shadow *s,uint64_t va,
             table=pte&PT_OA_MASK;
         }
     }
+#if SNAP_VIEW_RECLAIM
+    /* Room for the whole path or no change: a full pool refuses before any
+     * add, so the caller can reclaim and prepare again from a clean state. */
+    unsigned missing=0;
+    for(unsigned level=0;level<4;level++)missing+=find(v,path[level])<0;
+    if(v->count+missing>SPRR_VIEW_TABLES)return 0;
+#endif
     for(unsigned level=0;level<4;level++)if(!add(v,s,path[level],level))return 0;
     return 1;
 }
@@ -154,6 +175,44 @@ int sprr_views_prepare_user_leaf(struct sprr_views *v,const struct shadow *s,uin
     if(va>=(1UL<<47) || (va&4095))return 0;
     return prepare_path(v,s,va,1);
 }
+#if SNAP_VIEW_RECLAIM
+int sprr_views_reclaim(struct sprr_views *v,const struct shadow *s,int (*quiesce)(void *),void *ctx)
+{
+    if(!configured(v,s) || !quiesce)return -1;
+    unsigned count=(unsigned)v->count,kept=0;
+    for(unsigned n=0;n<count;n++)if(v->tables[n].level>3)return -1;
+    uint8_t keep[SPRR_VIEW_TABLES];
+    /* Levels 3 to 0, so every copied child is judged before its parent. A
+     * child at the wrong level is kept (its parent's sync refuses it anyway). */
+    for(unsigned level=4;level--;)for(unsigned n=0;n<count;n++) {
+        const struct sprr_view_table *t=&v->tables[n];
+        if(t->level!=level)continue;
+        int need=!level;
+        for(unsigned i=0;i<512 && !need;i++) {
+            uint64_t d;
+            if(s->read(s->ctx,t->source+8UL*i,&d))return -1;
+            if(!(d&1))continue;
+            if(level<3 && (d&3)==3) {
+                int child=find(v,d&PT_OA_MASK);
+                need=child>=0 && (v->tables[child].level!=level+1 || keep[child]);
+            } else need=(UINT32_C(0x214)>>sprr_pte_class(d))&1;  /* selector 2, 4 or 9 */
+        }
+        keep[n]=(uint8_t)need;kept+=(unsigned)need;
+    }
+    if(kept==count)return 0;
+    /* Stable for the kept tables; a retired entry keeps its own six pages. */
+    unsigned w=0;
+    for(unsigned n=0;n<count;n++)if(keep[n]) {
+        struct sprr_view_table t=v->tables[w];
+        v->tables[w++]=v->tables[n];v->tables[n]=t;
+    }
+    for(unsigned n=w;n<count;n++) {v->tables[n].source=0;v->tables[n].level=SPRR_VIEW_RETIRED;}
+    v->count=w;
+    if(!quiesce(ctx))return -1;
+    for(unsigned n=w;n<count;n++)v->tables[n].level=0;
+    return (int)(count-w);
+}
+#endif
 
 static int entry_decode(const struct sprr_views *v,unsigned n,uint64_t d,
                   unsigned index,unsigned cpu,uint64_t pperm,

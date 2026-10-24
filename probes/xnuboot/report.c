@@ -171,6 +171,18 @@ uint64_t xnuboot_report(uint64_t *out)
         out[OUT_DART_MEMO + 2 + n] = ((const uint64_t *)&c->root_ext->dart_memo.stats)[n];
     out[OUT_DART_MEMO + 2 + DART_MEMO_STATS_WORDS] = c->root_ext->dart_memo.live;
 #endif
+#if SNAP_VIEW_RECLAIM
+    out[OUT_VIEW_RECLAIM] = VIEW_RECLAIM_MAGIC;
+    out[OUT_VIEW_RECLAIM + 1] = (uint64_t)(8 * VIEW_RECLAIM_WORDS) << 32;
+    out[OUT_VIEW_RECLAIM + 2] = c->kernel_views.count;
+    /* A refused prepare leaves no count above the last success's. */
+    out[OUT_VIEW_RECLAIM + 3] = c->kernel_view_reclaim.high_water > c->kernel_views.count ?
+                                c->kernel_view_reclaim.high_water : c->kernel_views.count;
+    out[OUT_VIEW_RECLAIM + 4] = c->kernel_view_reclaim.reclaims;
+    out[OUT_VIEW_RECLAIM + 5] = c->kernel_view_reclaim.retired;
+    out[OUT_VIEW_RECLAIM + 6] = c->kernel_view_reclaim.full;
+    out[OUT_VIEW_RECLAIM + 7] = SPRR_VIEW_TABLES;
+#endif
 #if SNAP_TOKEN_TRIM
     out[OUT_TOKEN_TRIM] = TOKEN_TRIM_MAGIC;
     out[OUT_TOKEN_TRIM + 1] = (uint64_t)sizeof(struct token_trim_stats) << 32;

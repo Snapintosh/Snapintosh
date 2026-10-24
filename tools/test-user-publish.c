@@ -6,7 +6,9 @@
 
 static unsigned checks;
 #define CHECK(x) do {checks++;if(!(x)){fprintf(stderr,"line %d: %s\n",__LINE__,#x);exit(1);}}while(0)
-#define PAGES 257u
+/* Twice the largest selection plus one: USER_PUBLISH_MAX distinct private
+ * pages always fit after the three runtime pages. */
+#define PAGES (2u*USER_PUBLISH_MAX+1u)
 #define BASE UINT64_C(0xae1400000)
 #define END (BASE+(uint64_t)PAGES*4096)
 static struct root_publish_state dirty;
@@ -89,10 +91,10 @@ static void rejected(void)
         if(which==1)pages[1]=BASE-4096;
         if(which==2)pages[1]=END;
         if(which==3)pages[1]=pages[0];
-        if(which==4)pages[1]=BASE+256*4096; /* canonical page */
+        if(which==4)pages[1]=BASE+(PAGES-1)*4096; /* canonical page */
         if(which==5){private.bitmap[0]|=1;pages[1]=BASE;} /* runtime even if mislabeled */
         if(which==6)count=0;
-        if(which==7)count=129;
+        if(which==7)count=USER_PUBLISH_MAX+1;
         if(which==8)first++;
         if(which==9)end++;
         memcpy(saved,dirty.bitmap,sizeof(saved));

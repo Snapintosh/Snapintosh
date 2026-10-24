@@ -116,7 +116,7 @@ int TEST_PREPARE_ENTRY(void)
     struct sprr_state state[6]={0};int modes[6];
     for(unsigned cpu=0;cpu<6;cpu++){sprr_root_reset(&state[cpu],0xa);modes[cpu]=cpu&1;}
     struct shadow s=setup();CHECK(sprr_views_init(&views,&s));
-    CHECK(sizeof(plan)==67608 && sizeof(stats)==56);
+    CHECK(sizeof(plan)==24+16*SPRR_VIEW_TABLES+8*8192 && sizeof(stats)==56);
     CHECK(compare(&s,state,modes));CHECK(plan.source_count==6 && plan.required_count==4);
     for(unsigned pattern=0;pattern<64;pattern++) {
         for(unsigned cpu=0;cpu<6;cpu++) {
@@ -179,7 +179,7 @@ int TEST_PREPARE_ENTRY(void)
     CHECK(!compare(&s,state,modes));CHECK(plan.source_count==8192);
     /* The required-path union is independently bounded before allocations. */
     s=setup();CHECK(sprr_views_init(&views,&s));next=BASE+0x200000;
-    for(unsigned i=0;i<128;i++) {
+    for(unsigned i=0;i<SPRR_VIEW_TABLES;i++) {
         uint64_t table=BASE+0x80000+4096UL*i;
         put(BASE+0x2000,i,table+3);put(table,0,leaf(DATA+4096UL*i,9));
     }

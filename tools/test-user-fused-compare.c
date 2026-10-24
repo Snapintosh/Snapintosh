@@ -117,14 +117,15 @@ int main(void)
     s=setup();CHECK(sprr_views_init(&views,&s));stats.calls=63;blank_table=1;
     CHECK(!fused_compare(&s,state,modes));blank_table=0;
     /* Fill both mapping arrays to their supported maximum: three upper
-     * tables and125distinct TPRO leaf tables, with768private destinations. */
-    s=setup();next=BASE+0x100000;
-    for(unsigned i=0;i<125;i++) {
+     * tables and SPRR_VIEW_TABLES-3 distinct TPRO leaf tables, with six
+     * private destinations each. */
+    s=setup();next=BASE+0x80000+4096UL*SPRR_VIEW_TABLES;
+    for(unsigned i=0;i<SPRR_VIEW_TABLES-3;i++) {
         uint64_t table=BASE+0x80000+4096UL*i;
         put(BASE+0x2000,i,table+3);put(table,0,leaf(DATA+4096UL*i,9));
     }
     CHECK(sprr_views_init(&views,&s));CHECK(fused_compare(&s,state,modes));
-    CHECK(views.count==SPRR_VIEW_TABLES && source_maps==128 && copy_maps==768);
+    CHECK(views.count==SPRR_VIEW_TABLES && source_maps==SPRR_VIEW_TABLES && copy_maps==6*SPRR_VIEW_TABLES);
     CHECK(candidate_attempts<baseline_attempts);
     printf("Fused callbacks: %llu compared / %llu reference\n",
         (unsigned long long)candidate_attempts,(unsigned long long)baseline_attempts);

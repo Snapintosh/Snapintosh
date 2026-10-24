@@ -69,7 +69,7 @@ static inline int sprr_variants_swap(struct sprr_view_variants *a,struct sprr_vi
     const struct sprr_publish_state *p,unsigned cpu,uint64_t before,uint64_t saves)
 {
     if(!sprr_variants_shape(v,cpu) || !saves || p->root!=v->canonical_root ||
-       p->count!=v->count || p->pending[cpu][0] || p->pending[cpu][1] ||
+       p->count!=v->count || !sprr_publish_row_empty(p,cpu) ||
        (before&~SPRR_PPERM_MUTABLE)!=SPRR_PPERM_INITIAL) {a->errors++;return 0;}
     for(unsigned n=0;n<v->count;n++)
         if(!a->copy[n][cpu] || (a->copy[n][cpu]&4095)) {a->errors++;return 0;}

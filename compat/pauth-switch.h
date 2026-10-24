@@ -1,7 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #define PAUTH_BANK_STRIDE 256
+/* struct context's pauth_bank (asserted in probes/xnuboot/context.c). With
+ * SNAP_VIEW_RECLAIM, 65 struct sprr_views before it (kernel_views and the 64
+ * define-free user_views) are 8,192 bytes wider each (sprr-view.h). */
+#if SNAP_VIEW_RECLAIM
+#define PAUTH_BANK_CONTEXT 3172736
+#else
 #define PAUTH_BANK_CONTEXT 2640256
+#endif
 #define PAUTH_BANK_ENABLES 176
 #define PAUTH_BANK_ACTIVE 184
 #define PAUTH_BANK_ENTRIES 192

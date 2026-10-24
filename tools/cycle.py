@@ -283,6 +283,11 @@ def parse(argv=None):
                         'change switch a panel the firmware left in PWM-pin mode to DPCD control (level written first, '
                         'only the two mode bits changed, read back; on failure the old mode is restored and the '
                         'monitor stops)')
+    p.add_argument('--view-reclaim', action='store_true',
+                   help='opt-in kernel view pool (shadow/sprr-view.h): monitor define SNAP_VIEW_RECLAIM, 256 private '
+                        'kernel view tables instead of 128 and, when a protecting RETYPE finds them full, the copies no '
+                        'selector2/4 leaf needs any more retired (after an all-CPU sync, publication and TLBI) and their '
+                        'pages reused; report record VIEWRCL1. Monitor only')
     p.add_argument('--present-latch-us', type=int, default=None,
                    help='with --present-latch: guest boot-arg adreno_latch_us, the slack kept before row 0 (default '
                         '3000; 0 = the beam kext\'s aim before the vblank)')
