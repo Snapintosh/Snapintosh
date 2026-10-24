@@ -518,6 +518,19 @@ def parse(argv=None):
                         'kernel-view copy words patched instead of a full view re-sync per frame, and one '
                         'publication, refresh and TLBI per run of headers (b12v16: 14,880 calls held the token 7.79 ms '
                         'each); give it to every mode of the attempt')
+    p.add_argument('--gpu-coherent', action='store_true',
+                   help='with --gpu-va-wide and --root-cache-wide: SNAP_ADRENO_COHERENT, a bounded '
+                        'boot self-test of CPU/GPU cache coherency through the ring (CP_MEMCPY <= 1 MiB, both '
+                        'directions, controls first); only if every iteration passes do CB0\'s mirror leaves become '
+                        'IO-coherent (AttrIndx 1, SH IS), and the guest boot-arg adreno_coherent=1 lets an '
+                        'ADRENO_COHERENT_SKIP_MAINT AdrenoX2 skip CPU maintenance for write-back buffers. Outcome: '
+                        'EV_GPU_COHERENT; give it to every mode of the attempt')
+    p.add_argument('--gpu-coherent-force', action='store_true',
+                   help='DEBUG ONLY, for an A/B rendering check, with --gpu-coherent: SNAP_ADRENO_COHERENT_FORCE, no '
+                        'self-test. CB0\'s mirror leaves are IO-coherent and, with the guest boot-arg '
+                        'adreno_coherent_force=1 it adds, the kext skips CPU maintenance for write-back buffers '
+                        'although nothing proved this machine coherent. EV_GPU_COHERENT and the kext\'s log say '
+                        'FORCED; give it to every mode of the attempt')
     p.add_argument('--let-panic', action='store_true',
                    help='SNAP_LET_PANIC: XNU\'s own EL1 exceptions (its panic debugger trap) resume into its handler '
                         'instead of stopping the run, so the panic text reaches the console; give it to every mode')

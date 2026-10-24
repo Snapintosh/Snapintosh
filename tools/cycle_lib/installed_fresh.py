@@ -629,6 +629,18 @@ ATTR_CLEAN_DEFER_DEFINE = '-DSNAP_ATTR_CLEAN_DEFER=1'
 # invalidated once. Needs --attr-clean-defer (the second clean off the token) and --root-cache-wide; refused with
 # --token-trim. Appended after every earlier flag.
 MULTIPAGE_FAST_DEFINE = '-DSNAP_MULTIPAGE_FAST=1'
+# SNAP_ADRENO_COHERENT (--gpu-coherent). b12v19/b12v20 spend about
+# 16.7 ms of CPU cache maintenance per IB (214 MiB with cache-sparse). At prepare the monitor proves, with CP_MEMCPY
+# jobs of at most 1 MiB in both directions (and non-coherent controls first), that GPU accesses through AttrIndx 1 /
+# SH IS leaves snoop the CPU's caches; only then are CB0's mirror leaves IO-coherent, and ADRENO_GUEST_COHERENT tells
+# the kext so. Its state is in root_ext (--root-cache-wide); its scratch is the q1n1 arena's Stage 4 pool region,
+# free only with --gpu-va-wide. The guest boot-arg adreno_coherent=1 opts the kext in. Appended after every earlier
+# flag.
+GPU_COHERENT_DEFINE = '-DSNAP_ADRENO_COHERENT=1'
+# --gpu-coherent-force: debug only, an A/B rendering check of skipped maintenance before the self-test can prove
+# anything. The monitor reports ON with ADRENO_COHERENT_DETAIL_FORCED and runs no job; the kext accepts that only with
+# its own boot-arg adreno_coherent_force=1. Appended after GPU_COHERENT_DEFINE.
+GPU_COHERENT_FORCE_DEFINE = '-DSNAP_ADRENO_COHERENT_FORCE=1'
 # agents/dvfs (FAILURE-MODES.md): opt-in governors on vCPU 0's locked tick, state at the end of root_ext (so
 # --root-cache-wide), report DVFSREP1 after the thermal record, restored at the stop; both need --thermal-guard (they
 # never write without the guard's readings). compat/cpu-dvfs.h SNAP_CPU_DVFS: SCMI PERF LEVEL_SET fastchannels of the
@@ -1032,6 +1044,15 @@ def variant_flags(sets, args, variant=None):
              '--multipage-fast needs --attr-clean-defer and --root-cache-wide (and the kernel view reuse snapshot), '
              'not --token-trim')
         flags.append(MULTIPAGE_FAST_DEFINE)
+    if getattr(args, 'gpu_coherent', False):
+        need(GPU_VA_WIDE_DEFINE in flags and '-DSNAP_ROOT_CACHE_WIDE=1' in flags,
+             '--gpu-coherent needs --gpu-va-wide (its self-test scratch is the arena\'s Stage 4 pool region) and '
+             '--root-cache-wide (its state is in root_ext)')
+        flags.append(GPU_COHERENT_DEFINE)
+    if getattr(args, 'gpu_coherent_force', False):
+        need(getattr(args, 'gpu_coherent', False), '--gpu-coherent-force needs --gpu-coherent: it forces that '
+             'self-test\'s outcome')
+        flags.append(GPU_COHERENT_FORCE_DEFINE)
     return flags
 
 
@@ -1099,6 +1120,10 @@ def boot_addition(args):
     extra = []
     if getattr(args, 'present_maint', False):
         extra.append('adreno_present_maint=1')
+    if getattr(args, 'gpu_coherent', False):
+        extra.append('adreno_coherent=1')   # the kext still skips only after the monitor's self-test said ON
+    if getattr(args, 'gpu_coherent_force', False):
+        extra.append('adreno_coherent_force=1')   # and, debug only, after a forced ON (no self-test)
     resident_mib = getattr(args, 'resident_mib', None)
     if resident_mib is not None:
         need(0 <= resident_mib <= 4096, '--resident-mib must be 0..4096')
@@ -1987,8 +2012,10 @@ def boot(ws, args, dest, qualification):
                 need(step['serror_guard']['present'], 'GPU guard step found no SError guard')
         adoption = out('adopt').with_name(f'{args.prefix}-adopt-record.json')
         va_wide = qualification['environment'].get('SNAP_ADRENO_VA_WIDE') == '1'   # --gpu-va-wide's q1n1 half
-        code, _ = a16gpu(ws, device, out('adopt'), ['adopt', '--record', str(adoption), *(['--va-wide'] if va_wide else [])],
-                         gpu_env)
+        # --gpu-coherent's q1n1 half: adopt also proves CB0 MAIR0/CBAR read-only (the record is the same).
+        coherent = ['--coherent'] if GPU_COHERENT_DEFINE in qualification['flags'] else []
+        code, _ = a16gpu(ws, device, out('adopt'), ['adopt', '--record', str(adoption), *(['--va-wide'] if va_wide else []),
+                                                    *coherent], gpu_env)
         need(code == 0 and adoption.is_file(), 'GPU adoption refused')
         record['gpu']['adoption'] = dict(path=str(adoption), sha256=st.file_sha(adoption))
         proxy = runner.connect(device, tries=1)
