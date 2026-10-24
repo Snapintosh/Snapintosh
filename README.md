@@ -1,5 +1,9 @@
 # Snapintosh
 
+![Snapintosh CI](https://github.com/Snapintosh/Snapintosh/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![Tests](https://img.shields.io/badge/Host_Tests-35_passed-success.svg)
+
 ![Snapintosh — macOS on Snapdragon; ASCII hands reaching toward a red chip](docs/assets/snapintosh-ascii-chip-red.png)
 
 Snapintosh boots Apple's macOS 27 (build 26A428) on an ASUS Zenbook A16 laptop
@@ -129,6 +133,20 @@ You need:
 
 [docs/BUILDING.md](docs/BUILDING.md) has the steps.
 
+## Host Testing & Verification
+
+Snapintosh features a native host test suite runner that executes under Clang / GCC with AddressSanitizer and UndefinedBehaviorSanitizer enabled:
+
+```sh
+# Run the complete verified host suite (C test suites + Python unit tests)
+python3 tools/test_runner.py
+
+# Inspect workspace and hardware status with the interactive CLI dashboard
+python3 tools/cycle.py dashboard
+```
+
+Detailed test receipts and architectural benchmark reports can be exported using `--json-report build/report.json`.
+
 ## Bring your own Apple software
 
 This repository ships **no Apple, Qualcomm or ASUS binaries or firmware**. You
@@ -209,6 +227,7 @@ Snapintosh builds on the published work of others:
 
 | Read | For |
 | --- | --- |
+| [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) | major refactoring, performance benchmarks, safety hardening & CI report |
 | [docs/STATUS.md](docs/STATUS.md) | what works, known issues, roadmap |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the layers fit together, including the GPU stack and Wi-Fi |
 | [docs/BUILDING.md](docs/BUILDING.md) | building the monitor, kexts, plug-in and compiler |
