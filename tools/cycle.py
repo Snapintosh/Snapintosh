@@ -620,7 +620,14 @@ def parse(argv=None):
                    help='with --zone-log: records kept (boot-arg zrecs=N); give it to every mode of the attempt')
     p.add_argument('--early-stop-delay', type=int, metavar='SECONDS',
                    help='seconds from the kext\'s first-present or plug-in-failure stop request to the stop (default '
-                        '600); below the 1800 s watchdog; give it to every mode of the attempt')
+                        '600); below the watchdog; give it to every mode of the attempt')
+    p.add_argument('--watchdog', type=int, metavar='SECONDS',
+                   help='the run\'s watchdog, 1800 (default) to 7200 s; above 1800 the boot preflight requires the A16 '
+                        'on AC; give it to every mode of the attempt')
+    p.add_argument('--session', action='store_true',
+                   help='with --console: a desktop session with no first-present stop (SNAP_EARLY_STOP=console); it '
+                        'ends at the watchdog, the thermal guard or tools/request-stop.py; give it to every mode of '
+                        'the attempt')
     p.add_argument('--prime-secondaries', action='store_true',
                    help='opt-in: run all six vCPUs on Prime cluster 1 (SNAP_SMP_PRIME=1 and monitor define '
                         'SNAP_BOOT_RELOCATE: vCPU 0 moves off q1n1\'s cluster-0 CPU) instead of the lower-power '

@@ -424,6 +424,8 @@ TIMESYNC_FLAG = '-timesync_bringup'
 COMPRESSOR_SW_FLAG = '-vm_compressor_wk_sw'
 BASE_CMDLINE = '-v debug=0x8 serial=3 cluster_power=0 wdt=-1'
 WATCHDOG = 1800
+# --watchdog: a desktop session may run up to two hours (owner's decision, 2026-10-24), only on AC.
+WATCHDOG_MAX = 7200
 DISPLAY_SLOT = '/device-tree/arm-io/adreno-display'
 # The installed launches' environment lived only in deleted launch records: the
 # speed test's six-CPU settings without its RAM-disk preload requirement, plus
@@ -1105,10 +1107,27 @@ def variant_flags(sets, args, variant=None):
     return flags
 
 
+def run_watchdog(args):
+    """The run's watchdog in seconds: --watchdog, else WATCHDOG. Above WATCHDOG the boot preflight requires AC."""
+    value = getattr(args, 'watchdog', None)
+    if value is None:
+        return WATCHDOG
+    need(WATCHDOG <= value <= WATCHDOG_MAX, f'--watchdog must be {WATCHDOG}..{WATCHDOG_MAX} s')
+    return value
+
+
 def environment(args):
     """ENV, or with --console the console on the same poll; --kernel-sysreg-zero, --kernel-refmod-skip and
     --kernel-user-4k add the opt-in kernel patches."""
     env = dict(ENV, SNAP_EARLY_STOP='guest,console') if getattr(args, 'console', False) else dict(ENV)
+    watchdog = run_watchdog(args)
+    env['SNAP_WATCHDOG'] = str(watchdog)
+    if getattr(args, 'session', False):
+        # A desktop session: the kext gets no first-present stop request (probes/adreno.py advertises it only for the
+        # guest trigger), so the run lasts until the watchdog, the thermal guard or a host stop (tools/request-stop.py).
+        need(getattr(args, 'console', False), '--session needs --console (the host poll that request-stop.py uses)')
+        need(getattr(args, 'early_stop_delay', None) is None, '--session has no first-present stop: drop --early-stop-delay')
+        env['SNAP_EARLY_STOP'] = 'console'
     if getattr(args, 'hide_amx', False):
         env['SNAP_HIDE_AMX'] = '1'
     if getattr(args, 'guest_net', False):
@@ -1148,7 +1167,7 @@ def environment(args):
     if delay is not None:
         # The kext's first-present / plug-in-failure stop fires this long after its request (default 600 s);
         # it must leave the watchdog the last word.
-        need(60 <= delay < WATCHDOG, f'--early-stop-delay must be 60..{WATCHDOG - 1} s')
+        need(60 <= delay < watchdog, f'--early-stop-delay must be 60..{watchdog - 1} s')
         env['SNAP_EARLY_STOP_DELAY'] = env['SNAP_EARLY_STOP_MAX_DELAY'] = str(delay)
     return env
 
@@ -1737,7 +1756,7 @@ def prepare(ws, args, dest):
                          user_4k=getattr(args, 'kernel_user_4k', False), context_layout=context)
     need(all(sha(p) == h for p, h in sources.items()), 'sources changed during preparation')
     record = dict(schema=SCHEMA, status='OFFLINE_PREPARED_NOT_BOOTED', prefix=args.prefix, variant=args.variant,
-                  device=args.device or ws.device, profile=profile_name, watchdog_seconds=WATCHDOG, environment=environment(args),
+                  device=args.device or ws.device, profile=profile_name, watchdog_seconds=run_watchdog(args), environment=environment(args),
                   flags=flags, fast_defines=fast if args.variant == 'fast' else [], gpu_steps=steps,
                   root_hash_component=component, txm_helper=helper, auxkc_pin=pin,
                   window_header_prefix=WINDOW_HEADER_PREFIX, boot_argument_addition=boot_addition(args),
@@ -2102,6 +2121,8 @@ def boot(ws, args, dest, qualification):
         minimum = record['battery_minimum_without_ac'] = battery_minimum(None)
         need(status == 0 and battery['plausible'] and (battery['ac'] or battery['percent'] >= minimum),
              f'battery preflight refused: below {minimum}% without AC')
+        long_run = int(qualification['environment'].get('SNAP_WATCHDOG', WATCHDOG)) > WATCHDOG
+        need(battery['ac'] or not long_run, f'battery preflight refused: a watchdog above {WATCHDOG} s needs AC')
         record['status'] = 'BOOTING'
         write(path, record)
         settings = dict(qualification['environment'], SNAP_SMP_REPORT_PREFIX=args.prefix, SNAP_ADRENO_ADOPT=str(adoption),

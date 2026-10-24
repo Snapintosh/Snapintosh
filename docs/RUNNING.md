@@ -111,6 +111,12 @@ The guest also stops on its own: on a kernel panic, when the thermal guard
 trips (`--thermal-guard`), at the early-stop delay after the first present
 (`--early-stop-delay`), or at the watchdog.
 
+The watchdog is 1800 s unless `--watchdog SECONDS` sets it, up to 7200. Above
+1800 s the boot preflight requires the A16 on AC. For a desktop session to use,
+`--console --session --watchdog 7200` drops the kext's first-present stop, so
+the run lasts until the watchdog (exit 9), the thermal guard, or
+`tools/request-stop.py`.
+
 ### 5. Preserve, quiesce, retire
 
 ```sh
