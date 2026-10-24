@@ -17,6 +17,12 @@
  * samples 1 in 64). -DVARIANTS_PRE_CHANGE=1 drops the snapshot-generation
  * check from the exact predicate and must fail.
  *
+ * With -DSNAP_VIEW_RECLAIM=1 both machines also retire the copies of the three
+ * ordinary tables now and then (sprr_views_reclaim with kernel_views_quiesce's
+ * steps: snapshot invalidated, publication rows reset, refresh) and prepare one
+ * again on a retired set: every check above must keep holding while table
+ * positions move under the snapshot, the publication rows and the variants.
+ *
  * cc -std=gnu11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
  *    -Icompat -Ishadow tools/test-kernel-pperm-variants.c shadow/sprr-view.c \
  *    shadow/shadow.c shadow/mmu.c -o build/test-kernel-pperm-variants
@@ -111,7 +117,7 @@ static int reuse_skip(struct machine *m,unsigned cpu,int current,uint64_t before
     const struct sprr_publish_state *ps=&m->publish;
     return current && !((before^pperm)&SPRR_KERNEL_VIEW_PPERM) &&
         ps->root==views.canonical_root && ps->count==views.count &&
-        !ps->pending[cpu][0] && !ps->pending[cpu][1];
+        sprr_publish_row_empty(ps,cpu);
 }
 /* The unchanged monitor: kernel_change_pperm_impl with SNAP_KERNEL_PPERM_REUSE. */
 static int pperm_reference(unsigned cpu,uint64_t pperm)
@@ -269,6 +275,27 @@ static void both_prepare(uint64_t va)
     enter(&ref);s=kshadow();CHECK(sprr_views_prepare(&views,&s,va));leave();
     enter(&cand);s=kshadow();CHECK(sprr_views_prepare(&views,&s,va));leave();
 }
+#if SNAP_VIEW_RECLAIM
+static uint64_t reclaims,retired;
+/* kernel_views_quiesce on the active machine: refresh() is kernel_refresh
+ * (a miss: full sync, publication, saves++) and its ALLE1IS. */
+static int machine_quiesce(void *ctx)
+{
+    (void)ctx;
+    sprr_reuse_invalidate(&active->reuse);
+    sprr_publish_reset(&active->publish);
+    return refresh();
+}
+static void both_reclaim(void)
+{
+    struct shadow s;int a,b;
+    enter(&ref);s=kshadow();a=sprr_views_reclaim(&views,&s,machine_quiesce,0);leave();
+    enter(&cand);s=kshadow();b=sprr_views_reclaim(&views,&s,machine_quiesce,0);leave();
+    CHECK(a==b && a>=0 && ref.views.count==cand.views.count);
+    if(a>0) {reclaims++;retired+=(unsigned)a;}
+    invariants();
+}
+#endif
 static const uint64_t deltas[4]={0,0x100,SPRR_UPERM_TPRO_WRITE,0x100|SPRR_UPERM_TPRO_WRITE};
 static void canonical_change(void)
 {
@@ -378,8 +405,15 @@ int main(void)
             enter(&cand);CHECK(pperm_candidate(cpu,cand.pp[cpu]^0x100));leave();
             mutate(BASE+0x3000,5,old);both_refresh();
         } else if(op<34) {
-            if(prepared>=3) {both_refresh();continue;}
             static const uint64_t vas[3]={0x200000,0x401000,0x600000};
+#if SNAP_VIEW_RECLAIM
+            if(prepared>=3) {
+                /* Their leaves are ordinary: the three copies retire; the one
+                 * prepared again takes the first retired set. */
+                both_reclaim();both_prepare(vas[rnd(3)]);both_refresh();continue;
+            }
+#endif
+            if(prepared>=3) {both_refresh();continue;}
             if(prepared==1) {
                 mutate(BASE+0x2000,2,BASE+0x5000+3);
                 mutate(BASE+0x5000,1,DATA+3+ATTR+PT_UXN+PT_PXN);
@@ -400,6 +434,9 @@ int main(void)
         if(failed>20)break;
     }
     CHECK(prepared==3);
+#if SNAP_VIEW_RECLAIM
+    CHECK(reclaims>10 && retired>=reclaims);
+#endif
     CHECK(cand.exact>800 && cand.synced>=30 && cand.fallbacks>10 && !cand.mismatches);
     /* A synced swap is a CPU's first flip after a re-save (or after an
      * in-place flip, or its first ever); every other bit-8 flip is exact. */
@@ -416,6 +453,9 @@ int main(void)
            (unsigned long long)cand.exact,(unsigned long long)cand.synced,
            (unsigned long long)cand.inplace,(unsigned long long)cand.fallbacks,
            (unsigned long long)cand.skipped,(unsigned long long)cand.var.reserved);
+#if SNAP_VIEW_RECLAIM
+    printf("reclaim: %llu reclaims retired %llu tables\n",(unsigned long long)reclaims,(unsigned long long)retired);
+#endif
     printf("%s: %u kernel PPERM variant checks, %u failures\n",failed ? "FAIL" : "PASS",checks,failed);
     return failed ? 1 : 0;
 }

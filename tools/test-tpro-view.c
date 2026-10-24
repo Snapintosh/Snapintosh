@@ -5,7 +5,8 @@
 
 #define BASE UINT64_C(0x40000000)
 #define DATA UINT64_C(0x94050c000)
-#define BYTES (4u<<20)
+/* Room for a full pool of six-copy tables (SNAP_VIEW_RECLAIM: 256). */
+#define BYTES (SPRR_VIEW_TABLES>128 ? (8u<<20) : (4u<<20))
 #define ATTR (PT_AF|(3UL<<8)|(1UL<<11))
 static _Alignas(4096) unsigned char ram[BYTES],before[BYTES],expected[BYTES];
 static uint64_t next,fail_read;
