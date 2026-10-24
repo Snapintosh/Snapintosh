@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Build the A16 desktop AuxKC from this checkout: AdrenoX2 (SnapAdreno, PROFILE=desktop unless KEXT_PROFILE says
-# otherwise) and SnapI2CHID (PROFILE=desktop), linked the way the deployed desktop collections were:
+# otherwise) and SnapI2CHID (PROFILE=desktop unless I2C_PROFILE says otherwise), linked the way the deployed desktop
+# collections were:
 #   1. tools/build-auxkc-user.py   kmutil links both kexts against the J700 kernelcache and the KDK
 #   2. tools/auxkc-autoload.py     marks both bundles to autoload and writes packaging.json
 #   3. build/build-auxkc.py pin    admits the collection for the installed desktop guest profile (<kc>.json)
@@ -12,6 +13,8 @@
 #   Environment:
 #     KEXT_PROFILE  SnapAdreno profile (gpu/adreno-kext/kext/profiles/), default desktop; desktop-nocoherent for a
 #                   monitor without --gpu-coherent
+#     I2C_PROFILE   SnapI2CHID profile (drivers/snap-i2c-hid/profiles/), default desktop; desktop-fnkeys for the
+#                   keyboard's Fn-key layer (boot it with tools/cycle.py --input-fnkeys)
 #     REFERENCE     optional folder holding AdrenoX2.kext and SnapI2CHID.kext to compare with, section by section
 #                   (tools/macho-sections.py): for example a deployed collection's folder
 #     ZERO_AR_DATE  exported as 1 unless set: object times in the kexts' debug maps are zeroed, so two builds in the
@@ -33,6 +36,7 @@ R=$(cd "$(dirname "$0")/.." && pwd)
 NAME=${1:?usage: tools/build-auxkc-desktop.sh NAME}
 case "$NAME" in */*|.*|'') echo "error: NAME is a folder name under build/current-assets" >&2; exit 2;; esac
 KEXT_PROFILE=${KEXT_PROFILE:-desktop}
+I2C_PROFILE=${I2C_PROFILE:-desktop}
 export ZERO_AR_DATE=${ZERO_AR_DATE:-1}
 export PYTHONDONTWRITEBYTECODE=1
 DEST=$R/build/current-assets/$NAME
@@ -44,7 +48,7 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 
 OUT=$WORK/adrenox2 PROFILE=$KEXT_PROFILE sh "$R/gpu/adreno-kext/kext/build.sh" > "$WORK/adrenox2.log" 2>&1 ||
     { tail -20 "$WORK/adrenox2.log" >&2; exit 1; }
-OUT=$WORK/snapi2chid PROFILE=desktop sh "$R/drivers/snap-i2c-hid/build.sh" > "$WORK/snapi2chid.log" 2>&1 ||
+OUT=$WORK/snapi2chid PROFILE=$I2C_PROFILE sh "$R/drivers/snap-i2c-hid/build.sh" > "$WORK/snapi2chid.log" 2>&1 ||
     { tail -20 "$WORK/snapi2chid.log" >&2; exit 1; }
 
 mkdir -p "$DEST"
@@ -57,7 +61,7 @@ cp "$WORK/snapi2chid/DEFINES.txt" "$DEST/SnapI2CHID-DEFINES.txt"
         printf '%s %s%s\n' "$d" "$(git -C "$R/$d" rev-parse HEAD)" \
             "$(git -C "$R/$d" diff --quiet HEAD -- && echo '' || echo ' (uncommitted changes)')"
     done
-    echo "AdrenoX2 profile $KEXT_PROFILE, SnapI2CHID profile desktop, ZERO_AR_DATE=$ZERO_AR_DATE"
+    echo "AdrenoX2 profile $KEXT_PROFILE, SnapI2CHID profile $I2C_PROFILE, ZERO_AR_DATE=$ZERO_AR_DATE"
 } > "$DEST/sources.txt"
 
 cd "$R"
