@@ -231,6 +231,12 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'ccf0c8f4da4f63fbe25c
 # b12v19r: + resident re-pin kext b2686dfb (agents/resident-evict). Previous: relatch-sparse 1cd18fa5...
 # b12v19: relatch + cache-sparse kext 2cd7ef66 (agents/b12v19-kext). Rollback b12v18: relatch-nosparse 65243492...
 # b12v18: relatch kext 128667ac (agents/present-pacing). Rollback: latch2-pipe2-recover-nosparse, 2cb7b6cc...
+# --edp-backlight (opt-in, agents/brightness): the --present-latch collection with SnapAdreno PROFILE=desktop-backlight's
+# AdrenoX2 (the desktop profile plus -DADRENO_BACKLIGHT=1 in AdrenoDisplay.o: the AdrenoBacklight service CoreBrightness
+# drives) and SnapI2CHID's desktop profile. None until built (KEXT_PROFILE=desktop-backlight
+# tools/build-auxkc-desktop.sh NAME prints the two lines) and pinned: --edp-backlight refuses meanwhile.
+INPUT_AUXKC_DESKTOP_BACKLIGHT = None
+INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = None
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
@@ -648,6 +654,13 @@ GPU_COHERENT_DEFINE = '-DSNAP_ADRENO_COHERENT=1'
 # anything. The monitor reports ON with ADRENO_COHERENT_DETAIL_FORCED and runs no job; the kext accepts that only with
 # its own boot-arg adreno_coherent_force=1. Appended after GPU_COHERENT_DEFINE.
 GPU_COHERENT_FORCE_DEFINE = '-DSNAP_ADRENO_COHERENT_FORCE=1'
+# --edp-backlight (agents/brightness): compat/edp-backlight.h SNAP_EDP_BACKLIGHT, ADRENO_GUEST_BACKLIGHT QUERY/SET of the
+# panel's DPCD backlight level over the eDP controller's AUX channel. Only the AUX transport registers and DPCD
+# 0x721-0x723 are written, the level is clamped to [10% of full scale, the panel's maximum], and any failure leaves the
+# brightness as it was. The kext half is INPUT_AUXKC_DESKTOP_BACKLIGHT and the guest boot-arg adreno_backlight=1 the
+# flag adds. Monitor define only (no loader change). Appended after every earlier flag; off, the monitor is
+# byte-identical.
+EDP_BACKLIGHT_DEFINE = '-DSNAP_EDP_BACKLIGHT=1'
 # agents/dvfs (FAILURE-MODES.md): opt-in governors on vCPU 0's locked tick, state at the end of root_ext (so
 # --root-cache-wide), report DVFSREP1 after the thermal record, restored at the stop; both need --thermal-guard (they
 # never write without the guard's readings). compat/cpu-dvfs.h SNAP_CPU_DVFS: SCMI PERF LEVEL_SET fastchannels of the
@@ -742,6 +755,9 @@ def route_selected(args):
     need(not latch or va_wide,
          '--present-latch needs --gpu-va-wide and its chain (its AdrenoX2 is that collection\'s with ADRENO_LATCH, its '
          'SnapI2CHID stage B with SNAP_I2C_HID_LATENCY)')
+    edp_backlight = getattr(args, 'edp_backlight', False)
+    need(not edp_backlight or latch,
+         '--edp-backlight needs --present-latch and its chain (its AdrenoX2 is that collection\'s with ADRENO_BACKLIGHT)')
     need(not (vsync60 and (damage or cached or gpumap)),
          '--present-vsync60 already includes --present-gpumap\'s (and so --present-cached-read\'s) kext: give one of them')
     need(not (damage and cached), '--present-cached-read already includes --present-damage\'s present: give one of them')
@@ -767,6 +783,12 @@ def route_selected(args):
         if vsync60:
             return ((INPUT_TOUCHPAD_PROFILE if touchpad else INPUT_PROFILE), INPUT_AUXKC_VSYNC60,
                     INPUT_AUXKC_VSYNC60_SHA, INPUT_BUNDLES)
+        if dartpool and ptp and resident and beam and va_reclaim and va_wide and latch and edp_backlight:
+            need(INPUT_AUXKC_DESKTOP_BACKLIGHT is not None and INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA is not None,
+                 '--edp-backlight: its AuxKC is not pinned yet (INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA; '
+                 'KEXT_PROFILE=desktop-backlight tools/build-auxkc-desktop.sh NAME links it)')
+            return (INPUT_TOUCHPAD_PROFILE, INPUT_AUXKC_DESKTOP_BACKLIGHT, INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA,
+                    INPUT_BUNDLES)
         if dartpool and ptp and resident and beam and va_reclaim and va_wide and latch:
             need(INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH is not None and
                  INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA is not None,
@@ -1060,6 +1082,8 @@ def variant_flags(sets, args, variant=None):
         need(getattr(args, 'gpu_coherent', False), '--gpu-coherent-force needs --gpu-coherent: it forces that '
              'self-test\'s outcome')
         flags.append(GPU_COHERENT_FORCE_DEFINE)
+    if getattr(args, 'edp_backlight', False):
+        flags.append(EDP_BACKLIGHT_DEFINE)
     return flags
 
 
@@ -1131,6 +1155,12 @@ def boot_addition(args):
         extra.append('adreno_coherent=1')   # the kext still skips only after the monitor's self-test said ON
     if getattr(args, 'gpu_coherent_force', False):
         extra.append('adreno_coherent_force=1')   # and, debug only, after a forced ON (no self-test)
+    need(not getattr(args, 'edp_backlight_mode', False) or getattr(args, 'edp_backlight', False),
+         '--edp-backlight-mode needs --edp-backlight')
+    if getattr(args, 'edp_backlight', False):
+        extra.append('adreno_backlight=1')        # the kext publishes its service only after the monitor's QUERY
+    if getattr(args, 'edp_backlight_mode', False):
+        extra.append('adreno_backlight_mode=1')   # and may switch a panel left in PWM mode to DPCD control
     resident_mib = getattr(args, 'resident_mib', None)
     if resident_mib is not None:
         need(0 <= resident_mib <= 4096, '--resident-mib must be 0..4096')
@@ -1707,7 +1737,7 @@ def check(ws, args, dest):
     need(record['auxkc_pin']['sha256'] == selected(args)[2],
          'the AuxKC differs from the preparation (give --present-damage/--present-cached-read/--present-gpumap/'
          '--present-vsync60/--present-dartpool/--present-resident/--present-beam/--present-va-reclaim/--gpu-va-wide/'
-         '--present-latch/'
+         '--present-latch/--edp-backlight/'
          '--input-ptp/--guest-net to every mode)')
     need(record['flags'] == variant_flags(st.flag_sets(ws.root)[0], args, record['variant']), 'variant flags differ from the recipe')
     need(record['gpu_steps'] == [list(s) for s in gpu_steps(ws.root, args)], 'GPU steps differ from the pinned launcher')
