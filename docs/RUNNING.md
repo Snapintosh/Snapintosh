@@ -142,7 +142,7 @@ The flags fall into these groups:
 | Console and early stop | `--console`, `--single-user`, `--early-stop-delay`, `--let-panic`, `--panic-serve` |
 | Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us` |
 | Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline` |
-| GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--adreno-fill-br`, `--adreno-fence-br`, `--gpu-x290-survey` |
+| GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--gpu-x290-survey` |
 | Clocks and bandwidth | `--thermal-guard`, `--gpu-dvfs`, `--gpu-dvfs-ceiling`, `--cpu-dvfs`, `--ddr-vote`, `--llcc`, `--bw-probe` |
 | Storage | `--nvme-async`, `--nvme-converted` |
 | Wi-Fi | `--qcc2072-wifi`, `--qcc2072-auxkc`, `--qcc2072-auxkc-sha256` |
@@ -173,6 +173,18 @@ groups:
 
 The present-path flags select specific AdrenoX2 builds. Each needs the flags
 before it in its chain, and `--prepare` reports any missing prerequisite.
+
+Compared with that list, the b12v20 desktop run adds `--multipage-fast
+--resident-mib 1536` and uses `--gpu-dvfs-ceiling 1700`; b12v23 also adds
+`--gpu-coherent` and drops `--other-profile`. `--resident-mib` sets the residency budget of a re-pin
+AdrenoX2 (boot-arg `adreno_resident_mib`). `--gpu-coherent` needs `--gpu-va-wide`
+and `--root-cache-wide`: the monitor runs a bounded CPU/GPU coherency self-test at
+GPU prepare (event `EV_GPU_COHERENT` in the report) and only then maps CB0's
+mirror IO-coherent; the desktop-profile AdrenoX2 skips cache maintenance only
+after that test passed and with the boot-arg `adreno_coherent=1` the flag adds.
+The flag also runs q1n1's `a16gpu adopt --coherent`, which needs a q1n1 checkout
+that has that option. `--gpu-coherent-force` is a debug build without the
+self-test, for A/B rendering checks only.
 
 ## Installing a new Metal plug-in
 

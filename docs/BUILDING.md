@@ -99,6 +99,19 @@ AdrenoX2 build accepts feature defines (for example `ADRENO_BEAM`,
 `ADRENO_PIPELINE`, `ADRENO_PRESENT_SYNC`). The boot tool selects the matching
 build for each run flag.
 
+The deployed desktop kexts are build profiles: per-unit define sets kept in
+each component's `profiles/` folder. Without `PROFILE` the builds are unchanged.
+
+```sh
+PROFILE=desktop sh gpu/adreno-kext/kext/build.sh              # AdrenoX2 with IO-coherent skipping (--gpu-coherent)
+PROFILE=desktop-nocoherent sh gpu/adreno-kext/kext/build.sh   # the same without coherency
+PROFILE=desktop sh drivers/snap-i2c-hid/build.sh              # SnapI2CHID with input-latency polling
+```
+
+A profile writes `DEFINES.txt` beside the kext. Compare a build with a deployed
+kext using `python3 tools/macho-sections.py <deployed> <built>`: the sections
+match, while the file bytes also carry object paths, object times and a UUID.
+
 ## 4. Linking an AuxKC
 
 `kmutil` silently drops kexts that are not owned by `root:wheel`, and it still
@@ -117,6 +130,14 @@ stage, link and pin in one step. `tools/build-auxkc-user.py` links raw
 collections the same way. It runs `kmutil` as you and uses ordinary `sudo`
 (it prompts unless a sudo session is cached) only to stage and clean the
 root-owned copies.
+
+`tools/build-auxkc-desktop.sh NAME` builds the desktop collection from this
+checkout: both kexts with their `desktop` profiles (`KEXT_PROFILE=desktop-nocoherent`
+for AdrenoX2 without coherency), then `tools/build-auxkc-user.py`,
+`tools/auxkc-autoload.py` and `build/build-auxkc.py pin`. It writes
+`build/current-assets/NAME/`, prints the sha256 of every output and the two
+`tools/cycle_lib/installed_fresh.py` lines that pin the collection, and with
+`REFERENCE=<folder>` compares both kexts with a deployed collection's.
 
 To link the Wi-Fi controller into an existing guest collection, while keeping
 its graphics and input bundles:
