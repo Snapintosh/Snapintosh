@@ -2172,8 +2172,12 @@ def boot(ws, args, dest, qualification):
         need(battery['ac'] or not long_run, f'battery preflight refused: a watchdog above {WATCHDOG} s needs AC')
         record['status'] = 'BOOTING'
         write(path, record)
+        # The resident stage binds to its own ELF (probes/stagebind.py): the regular q1n1 build, or the gadget-NCM
+        # stage tools/a16-link-rearm.py arms after a reset (q1n1 build/uefi-gadget-ncm, Q1N1_GADGET_NCM) when built.
+        stage_builds = [ws.q / 'build/uefi'] + [p for p in [ws.q / 'build/uefi-gadget-ncm'] if p.is_dir()]
         settings = dict(qualification['environment'], SNAP_SMP_REPORT_PREFIX=args.prefix, SNAP_ADRENO_ADOPT=str(adoption),
-                        SNAP_TXM_NATIVE=str(dest / 'image4.bin'), SNAP_STAGE_BUILDS=str(ws.q / 'build/uefi'))
+                        SNAP_TXM_NATIVE=str(dest / 'image4.bin'),
+                        SNAP_STAGE_BUILDS=os.pathsep.join(str(p) for p in stage_builds))
         if settings.get('SNAP_QCC2072_WIFI'):
             # probes/run.py reads the prepared, hash-pinned inputs (check() re-verified them above).
             settings['SNAP_QCC2072_INPUTS'] = str(dest / QCC2072_INPUTS)
