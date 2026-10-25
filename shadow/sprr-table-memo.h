@@ -85,7 +85,10 @@ static inline void sprr_table_memo_note_fine(struct sprr_table_memo *m,uint64_t 
     }
     uint64_t clock=fine_sat_add(&m->clock,1,SPRR_TABLE_MEMO_CLOCK_MAX);
     uint64_t *w=&m->page[(pa-m->base)/4096];
-    *w=(clock<<16)|(*w&SPRR_TABLE_MEMO_POOL);
+    uint64_t old_w = __atomic_load_n(w, __ATOMIC_RELAXED), new_w;
+    do {
+        new_w = (clock << 16) | (old_w & SPRR_TABLE_MEMO_POOL);
+    } while (!__atomic_compare_exchange_n(w, &old_w, new_w, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
     fine_sat_add(&m->stats.notes,1,UINT64_MAX);
 }
 #endif

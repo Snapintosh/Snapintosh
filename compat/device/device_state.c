@@ -7,7 +7,7 @@ enum device_result device_model_access_state(const struct device_model *model,
 {
     if (!valid(model) || !value) return DEVICE_BAD_CONFIG;
     if (model->kind == DEVICE_SPMI_PMU_RTC_V1) return DEVICE_BAD_CONFIG;
-    if (offset >= model->span) return DEVICE_NOT_FOUND;
+    if (width > model->span || offset > model->span - width) return DEVICE_NOT_FOUND;
     if (model->kind == DEVICE_PMGR_ACC_BOOT_POLICY_V1) return DEVICE_BAD_CONFIG;
     if (model->kind == DEVICE_SEP_ASC_MAILBOX_V1)
         return state ? sep_asc_access(&state->sep_asc,offset,width,write,value,

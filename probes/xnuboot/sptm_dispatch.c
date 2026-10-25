@@ -952,8 +952,13 @@ static int monitor_call_impl(struct context *c, uint64_t *frame, uint64_t *elr)
         for (int level = start; level < 3; level++) {
             uint64_t entry;
             if (mem_read(c, table + 8UL * mmu_index(14, (uint32_t)level, va), &entry)
-                || (entry & 3) != 3) { missing = 1; missing_at = (uint64_t)level; break; }
-            table = entry & PT_OA_MASK;
+                || (entry & 3) != 3 || (entry & 0x3000UL)) { missing = 1; missing_at = (uint64_t)level; break; }
+            table = entry & 0x0000ffffffffc000UL;
+            if (c->params->mem_low &&
+                (table < c->params->mem_low || table + 0x4000 > c->params->mem_high ||
+                 (c->work_start && table < c->work_end && table + 0x4000 > c->work_start))) {
+                missing = 1; missing_at = (uint64_t)level; break;
+            }
         }
         /* The one a missing table hierarchy produces, and the one that decides
          * whether MAP_TABLE is what we are missing. The level is recorded
@@ -1003,6 +1008,13 @@ static int monitor_call_impl(struct context *c, uint64_t *frame, uint64_t *elr)
         }
 
         uint64_t slot = table + 8UL * mmu_index(14, 3, va);
+        if (c->params->mem_low &&
+            (slot < c->params->mem_low || slot + 8 > c->params->mem_high ||
+             (c->work_start && slot < c->work_end && slot + 8 > c->work_start))) {
+            map_page_failed(c, *elr, MAP_FAIL_ROOT_OUTSIDE, va, slot);
+            frame[0] = SPTM_TABLE_NOT_PRESENT;
+            break;
+        }
         struct sptm_aperture aperture = xnu_aperture(c);
         struct sptm_moved moved = xnu_moved(c);
         uint64_t existing = 0;

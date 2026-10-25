@@ -177,7 +177,15 @@ static int fine_native_store_propagate(struct context *c,uint64_t pa,uint64_t va
 }
 static int fine_mem_write(void *ctx,uint64_t pa,uint64_t value)
 {
+    if ((pa & 7UL) || !ctx)
+        return -1;
     struct context *c=ctx;
+    if (c->work_start && pa + 8UL > c->work_start && pa < (c->work_base ? c->work_base : c->work_end))
+        return -1;
+    int in_dram = c->params && (pa >= c->params->mem_low && pa <= c->params->mem_high - 8UL);
+    int in_shadow = c->work_base && (pa >= c->work_base && pa <= (c->next_table ? c->next_table : c->work_end) - 8UL);
+    if (!in_dram && !in_shadow)
+        return -1;
     if(fine_native_store_admit(c,pa,value))return -1;
     if(pa>=c->work_base && pa<c->next_table && c->next_table-pa>=8 &&
        *(volatile uint64_t *)pa!=value) {

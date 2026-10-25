@@ -328,6 +328,13 @@ static uint64_t guest_pa(uint64_t va)
     return (par & 0x0000fffffffff000UL) | (va & 0xfff);
 }
 
+static inline int guest_insn_pa_ok(const struct context *c, uint64_t pa)
+{
+    return pa && !(pa & 3UL) && c->params &&
+           pa >= c->params->mem_low && pa <= c->params->mem_high - 4UL &&
+           (!c->work_start || pa + 4UL <= c->work_start || pa >= c->work_end);
+}
+
 static uint64_t step_instruction_pa(struct context *c, uint64_t va, uint64_t spsr)
 {
     struct vcpu *v = vcpu_of(c);
@@ -353,12 +360,13 @@ static uint64_t step_instruction_pa(struct context *c, uint64_t va, uint64_t sps
                     return 0;
                 }
             }
-            return pa;
+            return guest_insn_pa_ok(c, pa) ? pa : 0;
         }
     }
     t->misses++;
     step_translation_clear(t);
     uint64_t pa = guest_pa(va);
+    if (!guest_insn_pa_ok(c, pa)) return 0;
     if (eligible && pa) {
         struct guard *g = guard_find(c, pa);
         if (g && g->mode == GUARD_EXEC &&

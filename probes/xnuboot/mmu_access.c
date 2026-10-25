@@ -4,7 +4,15 @@
  * Part of probes/xnuboot.c's translation unit, included in order; not compiled on its own. */
 static int mem_read(void *ctx, uint64_t pa, uint64_t *out)
 {
-    (void)ctx;
+    if ((pa & 7UL) || !ctx || !out)
+        return -1;
+    struct context *c = ctx;
+    if (c->work_start && pa + 8UL > c->work_start && pa < (c->work_base ? c->work_base : c->work_end))
+        return -1;
+    int in_dram = c->params && (pa >= c->params->mem_low && pa <= c->params->mem_high - 8UL);
+    int in_shadow = c->work_base && (pa >= c->work_base && pa <= (c->next_table ? c->next_table : c->work_end) - 8UL);
+    if (!in_dram && !in_shadow)
+        return -1;
     *out = *(volatile uint64_t *)pa;
     return 0;
 }
@@ -30,13 +38,21 @@ static void native_mark(struct context *,const struct sprr_views *,int);
 #endif
 static int mem_write(void *ctx, uint64_t pa, uint64_t value)
 {
+    if ((pa & 7UL) || !ctx)
+        return -1;
+    struct context *c = ctx;
+    if (c->work_start && pa + 8UL > c->work_start && pa < (c->work_base ? c->work_base : c->work_end))
+        return -1;
+    int in_dram = c->params && (pa >= c->params->mem_low && pa <= c->params->mem_high - 8UL);
+    int in_shadow = c->work_base && (pa >= c->work_base && pa <= (c->next_table ? c->next_table : c->work_end) - 8UL);
+    if (!in_dram && !in_shadow)
+        return -1;
 #if SNAP_NATIVE_TABLES
     /* Before the store: a raw TPRO leaf may enter only a table with variant
      * copies, and a table with copies only a value they can translate. */
     if(native_store_admit(ctx,pa,value))return -1;
 #endif
 #if SNAP_USER_VIEW_CACHE || SNAP_KERNEL_CLASS_PROOF || SNAP_ROOT_DIRTY_PUBLISH || SNAP_USER_TREE_MEMO
-    struct context *c=ctx;
     /* Callback-based canonical stores, separate from the pointer-based SPTM
      * transactions below. Identical stores leave either proof unchanged. */
     if(pa>=c->work_base && pa<c->next_table && c->next_table-pa>=8 &&
@@ -69,8 +85,6 @@ static int mem_write(void *ctx, uint64_t pa, uint64_t value)
         sprr_class_proof_note(&c->kernel_class_proof,pa);
 #endif
     }
-#elif !SNAP_NATIVE_TABLES
-    (void)ctx;
 #endif
     *(volatile uint64_t *)pa = value;
 #if SNAP_NATIVE_TABLES

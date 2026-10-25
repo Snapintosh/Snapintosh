@@ -556,7 +556,7 @@ enum device_result device_model_access_at(const struct device_model *model,
     int write, uint64_t *value)
 {
     if (!valid(model) || !state || !value) return DEVICE_BAD_CONFIG;
-    if (offset >= model->span) return DEVICE_NOT_FOUND;
+    if (width > model->span || offset > model->span - width) return DEVICE_NOT_FOUND;
     if (model->kind == DEVICE_SPMI_PMU_RTC_V1) {
         if (!state->pmu_rtc.ready) return DEVICE_BAD_CONFIG;
         return spmi_access(model,state,now,offset,width,write,value);

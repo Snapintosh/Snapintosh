@@ -332,7 +332,7 @@ static inline int sptm_boot_memory_valid(const struct sptm_memory *m)
         (m->boot_count && (!m->boot_ranges || !m->boot_aliases)) ||
         (!!m->boot_count!=!!m->boot_alias_count)) return 0;
     uint64_t total=0,aliased=0;
-    if (m->frame_high<m->frame_low) return 0;
+    if (m->frame_high<m->frame_low || m->frame_high>(1ULL<<48) || (m->frame_high-m->frame_low)>(1ULL<<48)) return 0;
     uint64_t map_size=((m->frame_high-m->frame_low)>>14)*16;
     if (map_size>UINT64_MAX-m->frame_map_pa) return 0;
     for (unsigned pass=0;pass<2;pass++) {

@@ -96,10 +96,14 @@ static inline enum sptm_fine_kernel_end sptm_fine_kernel_map(struct sptm_fine_ke
     for (int level = start; level < 3; level++) {
         uint64_t entry;
         if (k->guest_read(k->ctx, table + 8UL * mmu_index(14, (uint32_t)level, va), &entry) ||
-            (entry & 3) != 3) return SPTM_FINE_K_DECLINE;        /* the token path answers TABLE_NOT_PRESENT */
-        table = entry & PT_OA_MASK;
+            (entry & 3) != 3 || (entry & 0x3000UL)) return SPTM_FINE_K_DECLINE;        /* the token path answers TABLE_NOT_PRESENT */
+        table = entry & 0x0000ffffffffc000UL;
+        if (m->frame_low && (table < m->frame_low || table > m->frame_high - 0x4000UL))
+            return SPTM_FINE_K_DECLINE;
     }
     uint64_t slot = table + 8UL * mmu_index(14, 3, va), existing = 0;
+    if (m->frame_low && (slot < m->frame_low || slot > m->frame_high - 8UL))
+        return SPTM_FINE_K_DECLINE;
     if (k->guest_read(k->ctx, slot, &existing) || (new_pte & 3) != 3) return SPTM_FINE_K_DECLINE;
     k->old = existing;
     struct sptm_kernel_leaf plan;

@@ -306,7 +306,8 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
                  * further because of this cannot be read as one that works. */
                 if ((g_esr >> 26) == 0 && c->skip_undef) {
                     uint64_t pa = guest_pa(g_elr);
-                    uint32_t word = pa ? *(volatile uint32_t *)pa : 0;
+                    uint32_t word = guest_insn_pa_ok(c, pa)
+                        ? *(volatile uint32_t *)pa : 0;
                     record(c, EV_OTHER, g_elr, 0xDEAD0000UL | (word & 0xffff),
                            word, c->undef_skipped);
                     c->undef_skipped++;
@@ -485,6 +486,7 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
     if (ec == 0x32) {                            /* the stepped instruction is done */
         c->steps++;
         uint64_t pa = step_instruction_pa(c, *elr, physical_spsr);
+        if (pa && !guest_insn_pa_ok(c, pa)) pa = 0;
         if (SNAP_STEP_ALU && pa && exception_monitor_origin(*elr, physical_spsr) &&
             vcpu_of(c)->stepping.active && vcpu_of(c)->open_guards == 1 &&
             (pa & ~0xfffUL) != p->vbar) {
@@ -716,11 +718,11 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
         uint64_t target, spsr, translated, pa = guest_pa(*elr);
         __asm__ volatile("mrs %0, elr_el1" : "=r"(target));
         __asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
-        uint32_t word = pa >= p->mem_low && pa <= p->mem_high - 4
+        uint32_t word = guest_insn_pa_ok(c, pa)
             ? *(volatile uint32_t *)pa : 0;
         uint64_t vhcr = vcpu_of(c)->vncr_va ? *(volatile uint64_t *)(vcpu_of(c)->vncr_va + 0x78) : 0;
         uint64_t target_pa = guest_pa(target);
-        if (target_pa >= p->mem_low && target_pa <= p->mem_high - 4 &&
+        if (guest_insn_pa_ok(c, target_pa) &&
             exception_kernel_return(word, vhcr, target, spsr, &translated)) {
             step_arm(c, 0);
             guards_close(c);
@@ -754,7 +756,7 @@ static int xnuboot_trap_locked(uint64_t *frame, uint64_t esr, uint64_t *elr)
         uint64_t pa = guest_pa(*elr), sp, spsr;
         /* Executable guest memory only; never read an instruction from MMIO
          * or from a translation that points outside the owned RAM window. */
-        if (pa >= p->mem_low && pa <= p->mem_high - 4) {
+        if (guest_insn_pa_ok(c, pa)) {
             __asm__ volatile("mrs %0, spsr_el2" : "=r"(spsr));
             if (spsr & 1) __asm__ volatile("mrs %0, sp_el1" : "=r"(sp));
             else __asm__ volatile("mrs %0, sp_el0" : "=r"(sp));

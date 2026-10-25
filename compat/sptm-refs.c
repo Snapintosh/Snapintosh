@@ -101,7 +101,14 @@ static int counted(uint64_t pte)
 enum sptm_result sptm_refs_leaf(const struct sptm_memory *m,uint64_t table,
                                uint64_t va,uint64_t old,uint64_t next)
 {
-    if (!m || !m->refs || !sptm_boot_memory_valid(m)) return SPTM_BAD_CONFIG;
+    if (!m || !m->refs || !sptm_boot_memory_valid(m) || (table & 0x3fff)) return SPTM_BAD_CONFIG;
+    if (m->frame_low && (table < m->frame_low || table >= m->frame_high)) return SPTM_BAD_ADDRESS;
+    if (sptm_managed_frame(m, table)) {
+        uint64_t index = (table - m->frame_low) >> 14;
+        volatile uint8_t *p = m->map(m->ctx, m->frame_map_pa + index * 16, 16);
+        if (!p) return SPTM_MEMORY_UNAVAILABLE;
+        if (!table_type(p[2])) return SPTM_TYPE_MISMATCH;
+    }
     /* Every CPU leaf transition passes here; 4K is the finer user granule. */
     if (m->audit && (old&3)==3 && (next&3)==3 && ((old^next)&0x0000fffffffff000UL)) {
         struct sptm_pv_audit *a=m->audit;

@@ -83,7 +83,7 @@ static void secondary_run(struct secondary *s)
     if (arrived!=SERVICE_OK) { s->error=arrived; xnuboot_secondary_stop(); }
     if (!secondary_gic_start(s)) { s->error=0x100;xnuboot_secondary_stop(); }
     __atomic_store_n(&s->phase,2,__ATOMIC_RELEASE);
-    uint64_t frame[31]={0};
+    uint64_t frame[34]={0};
     if (!runtime_enter(c,frame,c->params->entry,SERVICE_PROFILE_BOOT)) xnuboot_secondary_stop();
     uint64_t hcr=(UINT64_C(1)<<31)|(UINT64_C(1)<<26)|(UINT64_C(1)<<30)|
         (UINT64_C(1)<<20)|(UINT64_C(1)<<18)|(UINT64_C(1)<<14)|1;

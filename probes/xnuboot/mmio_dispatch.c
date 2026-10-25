@@ -108,7 +108,7 @@ static enum device_result model_pair_access(struct context *c, uint64_t *frame,
         (write && model->kind!=DEVICE_SEP_ASC_MAILBOX_V1 && model->kind!=DEVICE_ANS_ASC_V1) ||
         (vcpu_of(c)->guest_sctlr & (1UL << 25))) return DEVICE_BAD_WIDTH;
     uint64_t code=guest_pa(pc), spsr, sp, far;
-    if (code < p->mem_low || code > p->mem_high-4) return DEVICE_BAD_WIDTH;
+    if (!guest_insn_pa_ok(c, code)) return DEVICE_BAD_WIDTH;
     __asm__ volatile("mrs %0, spsr_el2; mrs %1, far_el2"
                      : "=r"(spsr), "=r"(far));
     if ((spsr & 31) != 4 && (spsr & 31) != 5) return DEVICE_BAD_WIDTH;
@@ -164,7 +164,7 @@ static enum device_result model_preload_read(struct context *c, uint64_t *frame,
     if (model->kind!=DEVICE_I2C_EMPTY_V1 || (pc&3) ||
         (vcpu_of(c)->guest_sctlr&(1UL<<25))) return DEVICE_BAD_WIDTH;
     uint64_t code=guest_pa(pc), spsr, sp, far;
-    if (code<p->mem_low || code>p->mem_high-4) return DEVICE_BAD_WIDTH;
+    if (!guest_insn_pa_ok(c, code)) return DEVICE_BAD_WIDTH;
     __asm__ volatile("mrs %0, spsr_el2; mrs %1, far_el2" : "=r"(spsr), "=r"(far));
     if ((spsr&31)!=4 && (spsr&31)!=5) return DEVICE_BAD_WIDTH;
     if (spsr&1) __asm__ volatile("mrs %0, sp_el1" : "=r"(sp));
