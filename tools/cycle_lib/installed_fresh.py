@@ -252,9 +252,9 @@ INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = '9e916a4185bc609178fe80a3110e020d9f3167625da
 # KEXT_PROFILE=desktop-early-done I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh NAME (sudo for kmutil's staging)
 # and put the two lines it prints here. Every addition is inert without its switch (the monitor's coherent ON with
 # adreno_coherent=1; adreno_backlight=1; adreno_present_early_done), so the collection also serves --edp-backlight runs
-# without them. None until linked and pinned: those flag sets are refused rather than run on the nocoherent kext.
-INPUT_AUXKC_DESKTOP_EARLY_DONE = None
-INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA = None
+# without them. early-done-20261025: umbrella 822226c, SnapAdreno a2d43d0, SnapI2CHID f0b7984 (AdrenoX2 24f9e767).
+INPUT_AUXKC_DESKTOP_EARLY_DONE = 'build/current-assets/early-done-20261025/adreno-input.kc'
+INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA = '9aff1d3e0fc1fd0625b83165738b90196249e053d6cc149e609f6a608bd7a6d1'
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
