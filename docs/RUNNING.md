@@ -147,7 +147,7 @@ The flags fall into these groups:
 | --- | --- |
 | Console and early stop | `--console`, `--single-user`, `--early-stop-delay`, `--let-panic`, `--panic-serve` |
 | Input | `--input`, `--input-touchpad`, `--input-ptp`, `--input-active-us`, `--input-fnkeys` |
-| Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline` |
+| Present path | `--present-dartpool`, `--present-resident`, `--present-beam`, `--present-va-reclaim`, `--present-maint`, `--present-latch`, `--present-pipeline`, `--present-early-done` |
 | GPU | `--ib-async`, `--gpu-recover`, `--gpu-va-wide`, `--gpu-coherent`, `--resident-mib`, `--adreno-fill-br`, `--adreno-fence-br`, `--adreno-cs-samplers`, `--gpu-x290-survey` |
 | Panel brightness | `--edp-backlight`, `--edp-backlight-mode` |
 | Clocks and bandwidth | `--thermal-guard`, `--gpu-dvfs`, `--gpu-dvfs-ceiling`, `--cpu-dvfs`, `--ddr-vote`, `--llcc`, `--bw-probe` |
@@ -214,11 +214,30 @@ nits); either boot-arg moves the curve without rebuilding the monitor. The
 collection is built with
 `KEXT_PROFILE=desktop-next I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh
 NAME` for a monitor without `--gpu-coherent` (`desktop-next` is
-`desktop-nocoherent` plus the service); a `--gpu-coherent` run needs a
-`KEXT_PROFILE=desktop-backlight` collection pinned there instead. `--edp-backlight-mode` lets the first change switch a panel left in
+`desktop-nocoherent` plus the service). With `--gpu-coherent` or
+`--present-early-done` the run takes the collection pinned as
+`INPUT_AUXKC_DESKTOP_EARLY_DONE` instead (`KEXT_PROFILE=desktop-early-done
+I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh NAME`; `desktop-early-done` is
+`desktop-backlight`, the coherent `desktop` plus the service, with early
+completion), and is refused until that collection is pinned. `--edp-backlight-mode` lets the first change switch a panel left in
 PWM-pin mode to DPCD control. `tools/survey-edp-aux.py` checks, read-only from
 q1n1, that the clocks and the AUX controller the call needs are on.
 `tools/test-edp-backlight.py` is the offline test.
+
+`--present-early-done MODE` (needs `--edp-backlight` and its chain) adds the
+guest boot-arg `adreno_present_early_done=MODE` for the `desktop-early-done`
+AdrenoX2 (`src/AdrenoDisplayEarlyDone.h` in the kext). AdrenoDisplay then
+completes a layer-0 swap right after its scanout copy instead of at the next
+frame tick. WindowServer keeps at most two swaps outstanding, so completing at
+the copy frees one of its entries a refresh earlier and a frame that runs past
+one refresh can still make the next latch; WindowServer may then run up to one
+frame further ahead. `1` completes at every copy, `2` only while WindowServer
+is late (for `--present-early-hold-ms`, default 2000, after each late frame),
+`0` only measures. Every mode adds one `AdrenoDisplay: perf done` line per perf
+window: completions at the copy, late frames, engagements, and histograms of
+WindowServer's arrivals after each tick and of each late frame's lateness. It
+excludes `--present-hold on`. `tools/test-present-early-done.py` is the offline
+test (with the presentation replay's early-done scenarios).
 
 `--view-reclaim` gives the monitor `SNAP_VIEW_RECLAIM`. The kernel's per-CPU
 private page-table copies (`shadow/sprr-view.h`) hold 256 tables instead of
