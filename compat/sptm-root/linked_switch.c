@@ -235,8 +235,10 @@ int sptm_root_prepare_nest_linked(struct sptm_root_cached *e,struct shadow *s,
            mmu_walk(&hw,addr,s->read,s->ctx,&h) || b.valid || h.valid)return 0;
         uint64_t next=end;
         uint64_t x=next_boundary(addr,shift,b.level),y=next_boundary(addr,12,h.level);
-        if(x<next)next=x;if(y<next)next=y;
-        if(next<=addr)return 0;addr=next;
+        if(x<next)next=x;
+        if(y<next)next=y;
+        if(next<=addr)return 0;
+        addr=next;
     }
     /* Every source leaf must suit this root's policy, exactly as for a copy. */
 #if SNAP_NEST_FAST
@@ -269,7 +271,8 @@ int sptm_root_prepare_nest_linked(struct sptm_root_cached *e,struct shadow *s,
                !m->map(m->ctx,a.pa,g.page_size))return 0;
         }
         uint64_t next=next_boundary(addr,shift,a.level);
-        if(next<=addr)return 0;addr=next;
+        if(next<=addr)return 0;
+        addr=next;
     }
 #if SNAP_NEST_FAST
     }
@@ -310,7 +313,8 @@ static int unnest_linked(struct sptm_root_cached *e,struct shadow *s,
        base!=p->base || p->leaves>e->leaves)return 0;
     uint64_t found=0,descriptors=0;
     for(unsigned i=0;i<2048;i++)if(p->mask[i/64]&(1UL<<(i%64))) {
-        if(i>=p->count)return 0;descriptors++;
+        if(i>=p->count)return 0;
+        descriptors++;
         uint64_t addr=p->base+i*p->span,a,b,child,n;
         /* Before publication the root still names the shared table; after
          * it, nothing. The group is always found through the shared root. */

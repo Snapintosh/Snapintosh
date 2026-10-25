@@ -59,6 +59,7 @@ int early_stop_request(struct early_stop_state *s, unsigned source, uint64_t rea
                        uint64_t now, uint64_t hz, unsigned cpu, uint64_t pc,
                        const uint64_t *text)
 {
+    if (!s) return EARLY_STOP_DUPLICATE;
     /* Request/fire writers normally hold the monitor service lock. The phase
      * claim also preserves a coherent record if a peer races that boundary. */
     uint64_t ticks = hz && accepted > INT64_MAX / hz ? (uint64_t)INT64_MAX : accepted * hz;
@@ -93,12 +94,14 @@ duplicate:
 
 void early_stop_refuse(struct early_stop_state *s, int code)
 {
+    if (!s) return;
     bump(&s->refusals);
     __atomic_store_n(&s->last_refusal, (uint64_t)(int64_t)code, __ATOMIC_RELAXED);
 }
 
 uint64_t early_stop_deadline(const struct early_stop_state *s, uint64_t budget)
 {
+    if (!s) return budget;
     uint64_t state = load(&s->state);
     if (state != EARLY_STOP_PENDING && state != EARLY_STOP_FIRED && state != EARLY_STOP_UPDATING) return budget;
     uint64_t deadline = __atomic_load_n(&s->deadline, __ATOMIC_RELAXED);
@@ -107,6 +110,7 @@ uint64_t early_stop_deadline(const struct early_stop_state *s, uint64_t budget)
 
 int early_stop_fire(struct early_stop_state *s, uint64_t now, uint64_t budget, unsigned cpu)
 {
+    if (!s) return 0;
     uint64_t state = load(&s->state);
     if (state != EARLY_STOP_PENDING && state != EARLY_STOP_FIRED) return 0;
     uint64_t deadline = __atomic_load_n(&s->deadline, __ATOMIC_RELAXED);
@@ -127,6 +131,7 @@ int early_stop_fire(struct early_stop_state *s, uint64_t now, uint64_t budget, u
 
 void early_stop_finish(struct early_stop_state *s, uint64_t stop_word)
 {
+    if (!s) return;
     uint64_t state = load(&s->state);
     if (state == EARLY_STOP_FIRED)
         s->outcome = stop_word == ((UINT64_C(1) << 32) | s->fire_cpu) ?   /* SERVICE_STOP_NORMAL */

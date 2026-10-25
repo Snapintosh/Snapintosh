@@ -27,3 +27,5 @@ enum sep_sks_wire_result { SEP_SKS_SUCCESS, SEP_SKS_REFUSED, SEP_SKS_MALFORMED,
 enum sep_sks_wire_result sep_sks_wire(struct sep_sks_wire_state *state,
     uint32_t command, const uint8_t *request, uint32_t request_bytes,
     uint8_t *reply, uint32_t reply_capacity, uint32_t *reply_bytes);
+
+void q1n1_sha256(const void *data, uint64_t len, uint8_t digest[32]);

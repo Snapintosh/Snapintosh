@@ -20,6 +20,8 @@ enum irqfwd_result irqfwd_add(struct irqfwd *f, uint32_t intid, uint32_t aic_irq
 enum irqfwd_result irqfwd_physical(struct irqfwd *f, const struct irqfwd_ops *ops,
                                    uint32_t intid)
 {
+    if (!f || !ops || !ops->gic_disable || !ops->gic_complete || !ops->aic_level)
+        return IRQFWD_BAD;
     struct irqfwd_line *l = by_intid(f, intid);
     if (!l) return IRQFWD_NOT_OURS;
     /* Mask before completing: a level input still high would otherwise be
@@ -43,6 +45,7 @@ enum irqfwd_result irqfwd_physical(struct irqfwd *f, const struct irqfwd_ops *op
 void irqfwd_unmasked(struct irqfwd *f, const struct irqfwd_ops *ops,
                      unsigned word, uint32_t bits)
 {
+    if (!f || !ops || !ops->gic_pending || !ops->aic_level || !ops->gic_enable) return;
     for (unsigned n = 0; n < f->count; n++) {
         struct irqfwd_line *l = &f->line[n];
         if (l->aic_irq / 32 != word || !(bits & (UINT32_C(1) << (l->aic_irq % 32))) ||
@@ -60,6 +63,7 @@ void irqfwd_unmasked(struct irqfwd *f, const struct irqfwd_ops *ops,
 
 void irqfwd_quiesce(struct irqfwd *f, const struct irqfwd_ops *ops)
 {
+    if (!f || !ops || !ops->gic_disable || !ops->aic_level) return;
     for (unsigned n = 0; n < f->count; n++) {
         ops->gic_disable(ops->ctx, f->line[n].intid);
         ops->aic_level(ops->ctx, f->line[n].aic_irq, 0);

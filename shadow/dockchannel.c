@@ -91,15 +91,19 @@ struct dc_access dc_decode(uint64_t esr)
 
 uint64_t dc_narrow(const struct dc_access *a, uint64_t value)
 {
+    if (!a) return 0;
     if (a->size >= 8)
         return value;
+    if (a->size == 0)
+        return 0;
     return value & (((uint64_t)1 << (a->size * 8)) - 1);
 }
 
 uint64_t dc_extend(const struct dc_access *a, uint64_t value)
 {
+    if (!a) return 0;
     value = dc_narrow(a, value);
-    if (a->sign && a->size < 8) {
+    if (a->sign && a->size < 8 && a->size > 0) {
         uint64_t sign = (uint64_t)1 << (a->size * 8 - 1);
         if (value & sign)
             value |= ~((((uint64_t)1 << (a->size * 8)) - 1));
@@ -117,7 +121,7 @@ uint64_t dc_extend(const struct dc_access *a, uint64_t value)
  */
 int dc_shape(const uint64_t *span, uint64_t count)
 {
-    if (count < 2)
+    if (!span || count < 2)
         return 0;
     if (span[DC_WINDOW_DATA] < DC_DATA_SPAN_MIN)
         return 0;
@@ -129,6 +133,7 @@ int dc_shape(const uint64_t *span, uint64_t count)
 int dc_window(const uint64_t *pa, const uint64_t *span, uint64_t count,
               uint64_t ipa, uint64_t *off)
 {
+    if (!pa || !span || !off) return -1;
     /* No separate test for an empty entry. The loader pads device_pa[] and
      * device_span[] with zeros, and a zero span cannot match anything: the
      * comparison below is `ipa >= base && ipa < base`, which is a
@@ -151,6 +156,7 @@ static uint64_t dc_within(uint64_t off) { return off % DC_BLOCK; }
 int dc_read(const struct dockchannel *d, int window, uint64_t off,
             uint64_t *value)
 {
+    if (!d || !value) return DC_UNMODELLED;
     if (window == DC_WINDOW_IRQ) {
         switch (off) {
         case 0x0: *value = d->irq_mask[0]; return DC_OK;
@@ -235,7 +241,9 @@ int dc_read(const struct dockchannel *d, int window, uint64_t off,
 int dc_write(struct dockchannel *d, int window, uint64_t off, uint64_t value,
              uint8_t *tx, unsigned *tx_len)
 {
+    if (!tx_len) return DC_UNMODELLED;
     *tx_len = 0;
+    if (!d || !tx) return DC_UNMODELLED;
 
     if (window == DC_WINDOW_IRQ) {
         switch (off) {
@@ -293,11 +301,13 @@ int dc_write(struct dockchannel *d, int window, uint64_t off, uint64_t value,
  */
 unsigned dc_rx_free(const struct dc_rx *r)
 {
+    if (!r || r->count >= DC_RX_RING) return 0;
     return DC_RX_RING - r->count;
 }
 
 int dc_rx_push(struct dc_rx *r, uint8_t byte)
 {
+    if (!r) return -1;
     if (r->count >= DC_RX_RING) {
         r->refused++;
         return -1;
@@ -311,6 +321,7 @@ int dc_rx_push(struct dc_rx *r, uint8_t byte)
 int dc_read_rx(const struct dockchannel *d, struct dc_rx *rx, int window,
                uint64_t off, uint64_t *value)
 {
+    if (!value) return DC_UNMODELLED;
     if (!rx || !rx->count || window != DC_WINDOW_DATA || dc_block(off) != 1)
         return dc_read(d, window, off, value);
     switch (dc_within(off)) {

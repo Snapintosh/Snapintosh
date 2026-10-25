@@ -66,7 +66,12 @@ int shadow_reserve(struct shadow *s, uint64_t va, uint64_t size)
 int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
                uint64_t low, uint64_t upper)
 {
+    if (!s || !s->read || !s->write || !s->alloc || s->txsz < 16 || s->txsz > 39) return -1;
     if ((va | pa | size) & 0xfff) return -1;
+    if (!size) return 0;
+
+    uint64_t limit = 1ULL << (64 - s->txsz);
+    if (va >= limit || size > limit - va) return -1;
 
     /* The contiguous hint describes a run of 16 entries in the granule that
      * declared it. Carrying it across granules would promise the TLB a
@@ -105,7 +110,7 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
 int shadow_insert(struct shadow *s, const struct mmu_leaf *leaf,
                   uint64_t clip_start, uint64_t clip_end)
 {
-    if (!leaf->valid) return SHADOW_NOTHING;
+    if (!s || !leaf || !leaf->valid) return SHADOW_NOTHING;
 
     uint64_t start = leaf->base, end = leaf->base + leaf->size;
     if (start < clip_start) start = clip_start;

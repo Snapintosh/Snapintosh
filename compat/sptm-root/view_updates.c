@@ -248,8 +248,10 @@ int sptm_root_prepare_nest(struct sptm_root_cached *e,struct shadow *s,
            mmu_walk(&hw,addr,s->read,s->ctx,&h) || b.valid || h.valid)return 0;
         uint64_t next=end;
         uint64_t x=next_boundary(addr,shift,b.level),y=next_boundary(addr,12,h.level);
-        if(x<next)next=x;if(y<next)next=y;
-        if(next<=addr)return 0;addr=next;
+        if(x<next)next=x;
+        if(y<next)next=y;
+        if(next<=addr)return 0;
+        addr=next;
     }
     for(uint64_t addr=base;addr<end;) {
         struct mmu_leaf a;
@@ -262,7 +264,8 @@ int sptm_root_prepare_nest(struct sptm_root_cached *e,struct shadow *s,
                !m->map(m->ctx,a.pa,g.page_size) || shadow_reserve(s,addr,g.page_size))return 0;
         }
         uint64_t next=next_boundary(addr,shift,a.level);
-        if(next<=addr)return 0;addr=next;
+        if(next<=addr)return 0;
+        addr=next;
     }
     return 1;
 }
@@ -285,7 +288,8 @@ int sptm_root_commit_nest(struct sptm_root_cached *e,struct shadow *s,
             added++;
         }
         uint64_t next=next_boundary(addr,shift,a.level);
-        if(next<=addr)return 0;addr=next;
+        if(next<=addr)return 0;
+        addr=next;
     }
     e->leaves+=added;return 1;
 }
@@ -300,7 +304,8 @@ static int unnest_view(struct sptm_root_cached *e,struct shadow *s,
     struct mmu_config source={shift,17,e->root},hw={12,17,e->shadow};
     uint64_t found=0,descriptors=0;
     for(unsigned i=0;i<2048;i++)if(p->mask[i/64]&(1UL<<(i%64))) {
-        if(i>=p->count)return 0;descriptors++;
+        if(i>=p->count)return 0;
+        descriptors++;
         uint64_t start=p->base+i*p->span,stop=start+p->span;
         for(uint64_t addr=start;addr<stop;) {
             struct mmu_leaf a,b;
@@ -315,7 +320,8 @@ static int unnest_view(struct sptm_root_cached *e,struct shadow *s,
             } else {
                 uint64_t next=next_boundary(addr,12,b.level);
                 if(!commit) {uint64_t x=next_boundary(addr,shift,a.level);if(x<next)next=x;}
-                if(next<=addr)return 0;addr=next;
+                if(next<=addr)return 0;
+                addr=next;
             }
         }
         if(shadow_unmap(s,start,p->span,1))return 0;

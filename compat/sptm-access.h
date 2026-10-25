@@ -24,13 +24,13 @@
 #pragma once
 #include <stdint.h>
 
-__attribute__((noinline)) static inline uint64_t sptm_get_bytes(const volatile uint8_t *p, unsigned n)
+__attribute__((noinline)) static uint64_t sptm_get_bytes(const volatile uint8_t *p, unsigned n)
 {
     uint64_t v = 0;
     for (unsigned i = 0; i < n; i++) v |= (uint64_t)p[i] << (8 * i);
     return v;
 }
-__attribute__((noinline)) static inline void sptm_put_bytes(volatile uint8_t *p, uint64_t v, unsigned n)
+__attribute__((noinline)) static void sptm_put_bytes(volatile uint8_t *p, uint64_t v, unsigned n)
 {
     for (unsigned i = 0; i < n; i++) p[i] = (uint8_t)(v >> (8 * i));
 }
