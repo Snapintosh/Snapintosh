@@ -332,10 +332,19 @@ QCC2072_INPUTS = 'qcc2072-inputs'        # under the attempt's directory: the th
 # Settings-icons set (SnapMetal ADRENO_SETTINGS_ICONS): the mirror-slab rows plus the executable c76a4677 (CoreImage
 # compute kernels sampling sRGB and grey+alpha images; multi-input kernels behind AdrenoIBComputeSamplers), deployed by
 # tools/deploy-guest-plugin.py; the mirror-slab set remains for rollback as ADDITIONS_MIRRORSLAB.
-ADDITIONS = 'build/current-assets/metal-stage-settingsicons-20261024/trust-additions.json'
-ADDITIONS_SHA = 'cdc784df778f7544fac5b2c774c3b6ee49cc70a15670301f3c4515dfed5562ff'
-TRUST_PAYLOAD = 'build/current-assets/metal-stage-settingsicons-20261024/trustcache.payload'
-TRUST_SHA = '247598bc2b4b48c31124e6dde3b83a52b41aa59355f697416cec0e8420926636'
+# Iconfix set (SnapMetal icon-pixels-next, ADRENO_CS_TABLES): the settings-icons rows plus the executable 11d5ff9a
+# (CoreImage compute kernels get SP_CS_CONFIG NTEX = NSAMP = their T#/S# count, as Mesa programs them;
+# ADRENO_CS_TABLES=0 in a process's environment keeps the settings-icons counts), deployed by
+# tools/deploy-guest-plugin.py, and the icon-pixels probe 25f07e86 that tools/run-icon-pixels.py pushes; the
+# settings-icons set remains for rollback as ADDITIONS_SETTINGSICONS.
+ADDITIONS = 'build/current-assets/metal-stage-iconfix-20261024/trust-additions.json'
+ADDITIONS_SHA = '501a90b6e6fe79b346bcb81c1bddee315ae9fbe3d369ff6b5f44b115aeecc4de'
+TRUST_PAYLOAD = 'build/current-assets/metal-stage-iconfix-20261024/trustcache.payload'
+TRUST_SHA = '7857aabcda2814974193c24dbc3245312c3ba02d1de46848b8be60a332571af0'
+ADDITIONS_SETTINGSICONS = 'build/current-assets/metal-stage-settingsicons-20261024/trust-additions.json'
+ADDITIONS_SETTINGSICONS_SHA = 'cdc784df778f7544fac5b2c774c3b6ee49cc70a15670301f3c4515dfed5562ff'
+TRUST_PAYLOAD_SETTINGSICONS = 'build/current-assets/metal-stage-settingsicons-20261024/trustcache.payload'
+TRUST_SHA_SETTINGSICONS = '247598bc2b4b48c31124e6dde3b83a52b41aa59355f697416cec0e8420926636'
 ADDITIONS_MIRRORSLAB = 'build/current-assets/metal-stage-mirrorslab-20261021/trust-additions.json'
 ADDITIONS_MIRRORSLAB_SHA = '4802847aef13e6e46ebc50cd03b1e35ebafe929d5ae46f44f4de6a8d4fb64ae7'
 TRUST_PAYLOAD_MIRRORSLAB = 'build/current-assets/metal-stage-mirrorslab-20261021/trustcache.payload'
