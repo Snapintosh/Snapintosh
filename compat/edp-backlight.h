@@ -233,6 +233,27 @@ static inline uint32_t edp_bl_nits_to_slider(uint64_t nits_q16, uint64_t lo_q16,
     if (nits_q16 >= hi_q16) return EDP_BL_SLIDER_MAX;
     return (uint32_t)(((nits_q16 - lo_q16) * EDP_BL_SLIDER_MAX + (hi_q16 - lo_q16) / 2) / (hi_q16 - lo_q16));
 }
+/* A swap record's brightness (an IEEE 754 binary64 in nits, as IOMobileFramebufferSwapSetBrightness stores it) as
+ * 16.16 nits, rounded to nearest and capped at cap_q16, in integer arithmetic only: the bits come straight from a
+ * client's record. 0 with *q16 set; -1 for a NaN, an infinity or a negative value, which name no brightness. Zero and
+ * subnormals are 0 nits (the darkest request). */
+static inline int edp_bl_double_to_q16(uint64_t bits, uint64_t cap_q16, uint64_t *q16)
+{
+    /* A normal value is mantissa * 2^(exponent - 1075), so value * 2^16 = mantissa * 2^(exponent - 1059). */
+    uint32_t exponent = (uint32_t)(bits >> 52) & 0x7ffu;
+    uint64_t mantissa = (bits & ((1ull << 52) - 1)) | 1ull << 52, v;
+    if (exponent == 0x7ffu || (bits >> 63 && bits << 1)) return -1;
+    if (exponent == 0)
+        v = 0;
+    else if (exponent >= 1059)   /* 2^36 nits or more; a mantissa below 2^53 shifted by up to 10 stays below 2^63 */
+        v = exponent - 1059 > 10 ? UINT64_MAX : mantissa << (exponent - 1059);
+    else if (1059 - exponent > 63)
+        v = 0;
+    else
+        v = (mantissa + (1ull << (1059 - exponent - 1))) >> (1059 - exponent);
+    *q16 = v > cap_q16 ? cap_q16 : v;
+    return 0;
+}
 
 /* ---- Allow-lists: every MMIO access and every DPCD transaction the monitor makes passes one of these ----------- */
 static inline int edp_bl_mmio_read_ok(uint64_t pa)

@@ -202,10 +202,11 @@ DPCD `0x721`-`0x723`, clamping the level to between 2% of full scale and the
 panel's maximum, and stopping for the boot on any failure with the brightness
 left as it was (`compat/edp-backlight.h`, event `EV_EDP_BACKLIGHT`). The guest
 gets the AuxKC pinned as `INPUT_AUXKC_DESKTOP_BACKLIGHT`, whose AdrenoX2 has the
-`AdrenoBacklight` service, and the boot-arg `adreno_backlight=1`. CoreBrightness
-hands its nits to WindowServer, whose BrightnessControl writes them to the
-service as `brightness-nits` because the service carries
-`force-brightness-control` (the path and its evidence are in the kext's
+`AdrenoBacklight` service, and the boot-arg `adreno_backlight=1`. The service
+lets WindowServer bind the panel's framebuffer to a brightness control;
+CoreBrightness's nits then arrive in the swaps WindowServer submits (as on a
+DCP Mac), and AdrenoDisplay hands each new value to the service, which logs
+`SET <level> from swap` (the path and its evidence are in the kext's
 `src/AdrenoBacklight.h`). The service maps nits to a level proportionally, the
 top level being `adreno_backlight_max_nits` (default 500) and the darkest
 request `adreno_backlight_min_nits` (default 5, raised to the 2% floor's ~10
