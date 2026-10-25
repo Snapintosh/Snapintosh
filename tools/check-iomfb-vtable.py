@@ -24,7 +24,7 @@ Writes <out>/iomfb-vtable-check.json (the full per-slot table) and exits 1 on an
 Usage: tools/check-iomfb-vtable.py [--out DIR] [--kc PATH] [--kdk PATH] [--no-display] [--display-define NAME[=V] ...]
 --display-define (alias --define) compiles AdrenoDisplay.cpp, and only it, with that define too: a profile's
 AdrenoDisplay set, or an opt-in override such as ADRENO_DISPLAY_TRACE_MODES=1 or ADRENO_BACKLIGHT=1 (whose
-set_brightness_gated override must then pass the same slot check); without it the default build is checked.
+set_brightness_gated and swap_submit overrides must then pass the same slot check); without it the default build is checked.
 """
 import argparse
 import hashlib

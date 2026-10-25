@@ -13,12 +13,14 @@ safety property or bends the curve in a copy of the engine; the same program mus
 
 Wiring: probes/xnuboot.c defaults SNAP_EDP_BACKLIGHT to 0 and every monitor use sits under it; compat/edp-backlight.c is
 linked only through probes/run.py OPTIONAL; the call number and event number are unique; the kext's backlight code sits
-under ADRENO_BACKLIGHT and publishes what BrightnessControl needs to write to it (force-brightness-control), mapping
-every request through the one curve; installed-fresh appends the define last, adds the boot-args, and refuses until the
+under ADRENO_BACKLIGHT, publishes what BrightnessControl reads to bind the panel's IOMFB (not
+force-brightness-control), takes the brightness from the swap record and maps every request through the one curve;
+installed-fresh appends the define last, adds the boot-args, and refuses until the
 AuxKC is pinned.
 
-UserspaceContract (a 26A428 host with ipsw only, else SKIP): the dyld cache's BrightnessControl and IOMobileFramebuffer
-still carry the names that path relies on (gpu/adreno-kext/kext/src/AdrenoBacklight.h).
+UserspaceContract (a 26A428 host with ipsw only, else SKIP): the dyld cache's BrightnessControl, IOMobileFramebuffer and
+QuartzCore still carry the names that path relies on, and IOMobileFramebufferSwapSetBrightness still writes the swap
+record where the kext reads it (gpu/adreno-kext/kext/src/AdrenoBacklight.h).
 
 --build: xnuboot with each --qualification's flags, define absent, =0 and =1: absent == =0 == the qualification's
 monitor_sha256; =1 differs and fits the code budget (probes/run.py OUT_AT - CODE_AT), its headroom printed.
@@ -182,19 +184,33 @@ class Wiring(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_kext_brightness_path(self):
-        # The service carries what WindowServer's BrightnessControl needs to write brightness-nits to it
-        # (gpu/adreno-kext/kext/src/AdrenoBacklight.h, steps 2 and 3), and every request goes through the curve.
-        src = (ROOT / 'gpu/adreno-kext/kext/src/AdrenoDisplay/backlight.cpp').read_text()
-        force = re.search(r'kForceBrightnessControl\[(\d+)\] = \{([^}]*)\}', src)
-        self.assertIsNotNone(force, 'force-brightness-control bytes not found')
-        self.assertNotEqual(int(force.group(2).split(',')[0], 0), 0, 'its first byte must be nonzero')
-        for needle in ('setProperty("force-brightness-control", (void *)kForceBrightnessControl,',
-                       'setProperty("backlight-control", kOSBooleanTrue)', 'd->getObject("brightness-nits")',
-                       'putDict(params, "BrightnessMilliNits", nits)', 'setProperty("IODisplayParameters", params)',
+        # The service carries what WindowServer's BrightnessControl reads to bind the panel's IOMFB (and nothing that
+        # makes it write to the service: the sandbox refuses that), AdrenoDisplay takes the brightness from the swap
+        # record, and every request goes through the one curve (gpu/adreno-kext/kext/src/AdrenoBacklight.h).
+        kext = ROOT / 'gpu/adreno-kext/kext/src'
+        src = (kext / 'AdrenoDisplay/backlight.cpp').read_text()
+        for needle in ('setProperty("backlight-control", kOSBooleanTrue)', 'putDict(params, "BrightnessMilliNits", nits)',
+                       'setProperty("IODisplayParameters", params)',
                        'edp_bl_nits_to_level(nits_q16 < fMinQ16 ? fMinQ16 : nits_q16, fMaxNits, fFloor, fMax)',
-                       'fMinQ16 = edp_bl_min_nits_q16(fMinNits, fMaxNits, fFloor, fMax);'):
+                       'fMinQ16 = edp_bl_min_nits_q16(fMinNits, fMaxNits, fFloor, fMax);',
+                       'uint64_t AdrenoDisplay::swap_submit(IOMFBSwapRec *rec, IOUserClient *client, unsigned int *swapID)',
+                       'if (!edp_bl_double_to_q16(bits, (uint64_t)EDP_BL_NITS_LIMIT_MAX << 16, &q16))',
+                       'return IOMobileFramebufferLegacy::swap_submit(rec, client, swapID);',
+                       'fBacklight->requestNits(v & ~kSwapNitsPending, AdrenoBacklight::kSourceSwap);'):
             self.assertIn(needle, src)
+        self.assertNotIn('force-brightness-control', src)
         self.assertEqual(src.count('edp_bl_nits_to_level('), 1, 'one mapping for every source')
+        # The record's brightness lies where IOMobileFramebufferSwapSetBrightness writes it (UserspaceContract checks
+        # the same constants against the dyld cache).
+        consts = dict(re.findall(r'static constexpr size_t (kSwap\w+) = (0x[0-9a-f]+);', src))
+        self.assertEqual({k: int(v, 16) for k, v in consts.items()},
+                         {'kSwapRecordSize': 0x6e0, 'kSwapBrightnessPresent': 0x354, 'kSwapBrightnessNits': 0x35e})
+        header = (kext / 'AdrenoDisplay.h').read_text()
+        self.assertIn('virtual uint64_t swap_submit(IOMFBSwapRec *rec, IOUserClient *client, unsigned int *swapID) '
+                      'APPLE_KEXT_OVERRIDE;', header)
+        bad = scope_violations(kext / 'AdrenoDisplay/presentation.cpp', r'backlight', 'ADRENO_BACKLIGHT')
+        self.assertEqual(bad, [])
+        self.assertIn('backlightSwapGated();', (kext / 'AdrenoDisplay/presentation.cpp').read_text())
 
     def test_cycle(self):
         from cycle_lib import installed_fresh as f
@@ -238,14 +254,21 @@ class Wiring(unittest.TestCase):
 
 DSC = Path('/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e')
 IPSW = shutil.which('ipsw') or '/opt/homebrew/bin/ipsw'
-# The names the guest's 26A428 userspace must still use for AdrenoBacklight.h's path, per image: BrightnessControl's
-# match key, the keys it reads and writes, and the BrightnessControl entry points IOMobileFramebuffer resolves.
+# What the guest's 26A428 userspace must still do for AdrenoBacklight.h's path. Strings per image: BrightnessControl's
+# match key and the keys it reads; the BrightnessControl entry points IOMobileFramebuffer resolves to bind an IOMFB.
 USERSPACE_NAMES = {
-    'BrightnessControl': ('IOPropertyMatch', 'backlight-control', 'force-brightness-control', 'brightness-nits',
-                          'IODisplayParameters', 'BrightnessMilliNits', 'LmaxProduct'),
-    'IOMobileFramebuffer': ('BCBrtControlNewMonitorForAllDisplaysWithHandler', 'BCBrtControlGetCapabilities',
-                            'BCBrtControlSetNits'),
+    'BrightnessControl': ('IOPropertyMatch', 'backlight-control', 'IODisplayParameters', 'BrightnessMilliNits',
+                          'LmaxProduct'),
+    'IOMobileFramebuffer': ('BCBrtControlNewMonitorForAllDisplaysWithHandler', 'BCBrtControlGetCapabilities'),
 }
+# Symbols per image: the swap brightness call and CoreAnimation's per-swap sender.
+USERSPACE_SYMBOLS = {
+    'IOMobileFramebuffer': ('_IOMobileFramebufferSwapSetBrightness',),
+    'QuartzCore': ('__ZN2CA12WindowServer12IOMFBDisplay15swap_brightnessEv',),
+}
+# The framework keeps the swap record at this offset of its framebuffer object (kern_SwapBegin clears it there and
+# kern_SwapEnd submits it from there as external method 5).
+RECORD_BASE = 0x18
 
 
 def host_build():
@@ -269,6 +292,32 @@ class UserspaceContract(unittest.TestCase):
         found = set(re.findall(r'^0x[0-9a-f]+: "([^"]*)"\s+image=(\S+)$', out.stdout, re.M))
         missing = [(image, n) for image, ns in USERSPACE_NAMES.items() for n in ns if (n, image) not in found]
         self.assertEqual(missing, [])
+
+    def test_symbols_present(self):
+        for image, symbols in USERSPACE_SYMBOLS.items():
+            for symbol in symbols:
+                out = subprocess.run([IPSW, 'dsc', 'symaddr', str(DSC), symbol, '--image', image, '--no-color'],
+                                     capture_output=True, text=True, timeout=600)
+                self.assertRegex(out.stdout, r'0x[0-9a-f]+:.*\b%s\s+%s\b' % (re.escape(symbol), image),
+                                 f'{image}: {symbol}')
+
+    def disass(self, symbol):
+        out = subprocess.run([IPSW, 'dsc', 'disass', str(DSC), '--symbol', symbol, '--symbol-image',
+                              'IOMobileFramebuffer', '--no-color'], capture_output=True, text=True, timeout=600)
+        self.assertEqual(out.returncode, 0, out.stderr[-1000:])
+        return out.stdout
+
+    def test_record_offsets(self):
+        # The kext's offsets, rebased onto the framework's object: the setter must address both, and the submit must
+        # hand the whole record (that size, from that base) to external method 5.
+        src = (ROOT / 'gpu/adreno-kext/kext/src/AdrenoDisplay/backlight.cpp').read_text()
+        consts = {k: int(v, 16) for k, v in re.findall(r'static constexpr size_t (kSwap\w+) = (0x[0-9a-f]+);', src)}
+        setter = self.disass('_kern_SwapSetBrightness')
+        for field in ('kSwapBrightnessPresent', 'kSwapBrightnessNits'):
+            self.assertRegex(setter, r'#%#x\b' % (RECORD_BASE + consts[field]), field)
+        submit = self.disass('_kern_SwapEnd')
+        for value in (RECORD_BASE, consts['kSwapRecordSize'], 5):
+            self.assertRegex(submit, r'#%#x\b' % value)
 
 
 @unittest.skipUnless(ARGS.build, 'pass --build to compile the monitor (minutes)')
@@ -309,14 +358,16 @@ class Kext(unittest.TestCase):
         c = subprocess.run([sys.executable, str(ROOT / 'tools/macho-sections.py'), str(ref),
                             str(out / 'default/AdrenoX2.kext/Contents/MacOS/AdrenoX2')], capture_output=True, text=True)
         self.assertRegex(c.stdout, r'(\d+) of \1 sections identical', c.stdout)
-        default = (out / 'default/AdrenoX2.kext/Contents/MacOS/AdrenoX2').read_bytes()
-        self.assertNotIn(b'force-brightness-control', default)
+        default = subprocess.run(['nm', '-m', str(out / 'default/AdrenoX2.kext/Contents/MacOS/AdrenoX2')],
+                                 capture_output=True, text=True).stdout
+        self.assertNotIn('__ZN13AdrenoDisplay11swap_submitEP12IOMFBSwapRecP12IOUserClientPj', default)
         for profile in profiles:
             binary = out / profile / 'AdrenoX2.kext/Contents/MacOS/AdrenoX2'
             nm = subprocess.run(['nm', '-m', str(binary)], capture_output=True, text=True).stdout
             self.assertIn('__ZN13AdrenoDisplay20set_brightness_gatedEi', nm, profile)
+            self.assertIn('__ZN13AdrenoDisplay11swap_submitEP12IOMFBSwapRecP12IOUserClientPj', nm, profile)
             self.assertIn('__ZN15AdrenoBacklight10gMetaClassE', nm, profile)
-            self.assertIn(b'force-brightness-control\0', binary.read_bytes(), profile)
+            self.assertNotIn(b'force-brightness-control', binary.read_bytes(), profile)
 
 
 if __name__ == '__main__':
