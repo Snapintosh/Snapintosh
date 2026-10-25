@@ -222,6 +222,130 @@ def run_case(q, guard_module, name, *, phase=None, fault=None, raw=False,
     return record
 
 
+class DatagramTarget:
+    """A q1n1 target behind a datagram link (udplink), for MEMWRITE and NOP:
+    it scans for a request, checks request and data checksums, and answers
+    ST_XFRERR for a write whose data does not check out. The transport carries
+    1400-byte datagrams and loses the ones a case names. Nothing is opened."""
+
+    datagrams = True
+
+    def __init__(self, q, drop):
+        self.q, self.drop = q, set(drop)
+        self.sent = 0
+        self.stream, self.out = bytearray(), bytearray()
+        self.memory = {}
+        self.trace, self.closed, self.xfrerr = [], 0, 0
+
+    def close(self):
+        self.closed += 1
+
+    def write(self, data):
+        q = self.q
+        data = bytes(data)
+        for at in range(0, len(data), 1400):
+            self.sent += 1
+            if self.sent in self.drop:
+                self.trace.append(dict(operation='dropped', datagram=self.sent))
+                continue
+            self.stream += data[at:at + 1400]
+        self.trace.append(dict(operation='write', bytes=len(data)))
+        while True:
+            at = self.stream.find(b'\xff\x55\xaa')
+            if at < 0:
+                del self.stream[:max(0, len(self.stream) - 2)]
+                return
+            del self.stream[:at]
+            if len(self.stream) < 64:
+                return
+            request = bytes(self.stream[:64])
+            kind = struct.unpack_from('<I', request)[0]
+            if q.checksum(request[:60]) != struct.unpack_from('<I', request, 60)[0]:
+                del self.stream[:3]
+                continue
+            if kind == q.REQ_MEMWRITE:
+                address, size, expected = struct.unpack_from('<QQI', request, 4)
+                if len(self.stream) < 64 + size:
+                    return
+                payload = bytes(self.stream[64:64 + size])
+                del self.stream[:64 + size]
+                status = 0
+                if q.checksum(payload) == expected:
+                    self.memory[address] = payload
+                else:
+                    status = q.ST_XFRERR
+                    self.xfrerr += 1
+                self.reply(kind, status, struct.pack('<I', expected))
+            elif kind == q.REQ_NOP:
+                del self.stream[:64]
+                self.reply(kind, 0, struct.pack('<Q', 0))
+            else:
+                raise AssertionError(f'unexpected request {kind:#x}')
+
+    def reply(self, kind, status, data):
+        prefix = struct.pack('<Ii24s', kind, status, data.ljust(24, b'\0'))
+        self.out += prefix + struct.pack('<I', self.q.checksum(prefix))
+
+    def read(self, size, timeout):
+        self.trace.append(dict(operation='read', size=size))
+        if len(self.out) < size:
+            raise TimeoutError(f'expected {size} bytes, got {len(self.out)}')
+        data = bytes(self.out[:size])
+        del self.out[:size]
+        return data
+
+    def drain(self, quiet, limit):
+        kept = bytes(self.out)
+        self.out.clear()
+        return kept
+
+
+def run_loss_case(q, guard_module, name, *, retries, drop, expect):
+    """A memory write over a lossy datagram link: the guard must let the
+    Link's own recovery through (journaled) and still freeze when it fails."""
+    record = dict(name=name, retries=retries, dropped=sorted(drop), hardware=False)
+    snapshots = []
+    target = DatagramTarget(q, drop)
+    link = q.Link('offline-replay-only', transport=target)
+    link.loss_retries = retries
+    proxy = q.Proxy(link)
+    proxy.stage_features = lambda: 0
+    guard = guard_module.ControlGuard(proxy, record, lambda: snapshots.append(json.loads(json.dumps(record))))
+    p = guard.proxy
+    data = bytes((k * 7 + 3) & 0xff for k in range(6000))
+    try:
+        p.link.writemem(0x8000, data)
+        record['outcome'] = 'written'
+    except BaseException as exc:
+        record['raised'] = f'{type(exc).__name__}: {exc}'
+        record['outcome'] = 'frozen' if guard.frozen else 'raised'
+    events = [e['event'] for e in record['control_guard']['events']]
+    record['events'] = events
+    check(record['outcome'] == expect, f'{name}: {record["outcome"]}, expected {expect}')
+    if expect == 'written':
+        check(not guard.frozen and target.memory.get(0x8000) == data, f'{name}: write not recovered intact')
+        check('transport_loss' in events and 'transport_loss_recovered' in events,
+              f'{name}: recovery was not journaled')
+        check(any('transport_loss' in [e['event'] for e in snap['control_guard']['events']]
+                  for snap in snapshots), f'{name}: loss not saved before the recovery went on')
+        p.link.writemem(0x9000, data[:100])            # the session goes on
+        check(target.memory.get(0x9000) == data[:100], f'{name}: session did not continue')
+    else:
+        check(guard.frozen, f'{name}: a failed write did not freeze the session')
+        count = len(target.trace)
+        for attempt in (lambda: p.link.writemem(0, b'x'), lambda: p.link.transport.read(1, 0.01)):
+            try:
+                attempt()
+            except guard_module.Frozen:
+                pass
+            else:
+                raise AssertionError(f'{name}: I/O after freeze was not blocked')
+        check(len(target.trace) == count, f'{name}: target I/O occurred after freeze')
+    guard.close()
+    record['wire_trace'] = target.trace
+    return record
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
@@ -257,6 +381,19 @@ def main():
             result['current_case'] = name
             save_json(args.output, result)
             result['cases'].append(run_case(q, guard_module, name, **options))
+            save_json(args.output, result)
+        # Datagram loss in a 6000-byte memory write. Datagrams: the request (1)
+        # and its data (2-6); after a loss the resync's filler (7-11) and NOP
+        # (12); then the repeated request (13) and data (14-18).
+        loss_cases = [
+            ('udp-write-loss-recovered', dict(retries=1, drop={3}, expect='written')),
+            ('udp-write-loss-retries-off', dict(retries=0, drop={3}, expect='frozen')),
+            ('udp-write-loss-every-attempt', dict(retries=1, drop={3, 15}, expect='frozen')),
+            ('udp-write-loss-resync-nop-lost', dict(retries=1, drop={3, 12}, expect='frozen'))]
+        for name, options in loss_cases:
+            result['current_case'] = name
+            save_json(args.output, result)
+            result['cases'].append(run_loss_case(q, guard_module, name, **options))
             save_json(args.output, result)
         result.update(status='PASS', cases_passed=len(result['cases']), finished_unix=time.time())
         result.pop('current_case', None)

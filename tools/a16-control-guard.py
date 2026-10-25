@@ -6,6 +6,8 @@ Use ControlGuard(proxy, record, save).proxy from the beginning of admission.
 The save callback must durably save record and must never access the target.
 The guard owns this proxy/link until close; do not retain or reuse raw handles.
 This is a single-owner session guard, not a reconnect or recovery mechanism.
+The one recovery it lets through is the q1n1 Link's own, inside a memory
+write on a datagram link (see _recoverable_write).
 
 Failure inventory and contract: docs/A16-CPU-POLICY-REVIEW-20261018.md.
 """
@@ -18,6 +20,14 @@ import time
 
 class Frozen(RuntimeError):
     """Target I/O is prohibited for this session."""
+
+
+def _timed_out(exc):
+    """A transport timeout as the q1n1 Link raises it (TimeoutError from a
+    datagram transport, or its ProxyTimeout), matched by name so the guard
+    keeps no import of the proxy module."""
+    return not isinstance(exc, Frozen) and any(
+        c.__name__ in ('TimeoutError', 'ProxyTimeout') for c in type(exc).__mro__)
 
 
 def _summary(value):
@@ -56,6 +66,9 @@ class ControlGuard:
 
     Any exception from a target-facing operation freezes the session. Definite
     SCMI status errors are decoded above this layer and need not freeze it.
+    A transport timeout inside link.writemem, when the Link recovers lost
+    datagrams itself, is journaled instead; the write still freezes the
+    session if it fails as a whole.
     A returned P_CALL acknowledges execution only; the conductor must validate
     its expected return/report and call freeze() on ambiguous results.
     """
@@ -74,6 +87,8 @@ class ControlGuard:
         self._frozen = False
         self._reason = None
         self._closed = False
+        self._raw_transport = getattr(self._raw_link, 'transport', None)
+        self._write_depth = 0          # nesting of recoverable link.writemem calls
 
         # Internal helpers are bound to the raw proxy/link. Guard their lower
         # boundary too, so catching an exception inside a helper cannot revive I/O.
@@ -183,6 +198,21 @@ class ControlGuard:
             self.freeze(f'proxy.request({opcode:#x}) failed: {type(exc).__name__}: {exc}')
             raise
 
+    def _recoverable_write(self, kind, name):
+        """Whether this call is a memory write the q1n1 Link may recover itself.
+
+        On a datagram link (udplink) one lost datagram leaves the target waiting
+        for write data and the host waiting for a reply; with Q1N1_UDP_RETRIES
+        the Link then resynchronises (filler to finish the target's read, a
+        drain, and a NOP round trip that proves the stream back in step) and
+        repeats the write. A memory write is idempotent, so its inner transport
+        timeouts are not ambiguous target state. Never a P_ request, never a
+        read (a repeated MMIO read can have side effects), never while a native
+        call is unresolved."""
+        return (kind == 'link' and name == 'writemem' and self._state['native_inflight'] is None
+                and getattr(self._raw_link, 'loss_retries', 0) > 0
+                and getattr(self._raw_transport, 'datagrams', False))
+
     def _invoke(self, kind, name, operation, args, kwargs):
         if kind in ('link', 'transport') and name == 'close':
             # The link close is a host resource release, not a target command.
@@ -192,6 +222,10 @@ class ControlGuard:
         self._require_open()
         self._state['operations'] += 1
         label = f'{kind}.{name}'
+        recoverable = self._recoverable_write(kind, name)
+        if recoverable:
+            self._write_depth += 1
+            losses = self._state.get('transport_losses', 0)
         try:
             if kind == 'link' and name == 'readmem':
                 # Do not allow the link helper to retry a corrupted payload.
@@ -210,10 +244,23 @@ class ControlGuard:
                     raise RuntimeError('split raw native request bypasses journaled completion')
             result = operation(*args, **kwargs)
             self._require_open()         # also catches swallowed inner failures
+            if recoverable and self._state.get('transport_losses', 0) != losses:
+                self._event('transport_loss_recovered', operation=label,
+                            losses=self._state['transport_losses'] - losses)
+                self._persist()
             return result
         except BaseException as exc:
+            if kind == 'transport' and self._write_depth and _timed_out(exc):
+                # Inside a recoverable write: the Link resynchronises next.
+                self._state['transport_losses'] = self._state.get('transport_losses', 0) + 1
+                self._event('transport_loss', operation=label, error=f'{type(exc).__name__}: {exc}')
+                self._persist()
+                raise
             self.freeze(f'{label} failed: {type(exc).__name__}: {exc}')
             raise
+        finally:
+            if recoverable:
+                self._write_depth -= 1
 
     def restore_scratch(self, scratch):
         """Return a host-only skipped record if native/transport state is unknown."""
