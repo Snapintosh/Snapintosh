@@ -17,7 +17,8 @@
  * - busy_coherent: the same frames with b12v23's maintenance (--gpu-coherent: 1.05 ms and 40 MiB per IB);
  * - quiet: the cursor moving over an idle desktop, a layer-0 swap every refresh and no IB (b12v20/b12v21: 59.8/s);
  * - sporadic: next2c's idle windows (57.9/s): the quiet frames plus 5% of frames with an IB whose kext time is 13 ms
- *   (TO_DEVICE 7 ms over 208 MiB and 6 ms of preparation) and 3.4 ms of GPU.
+ *   (TO_DEVICE 7 ms over 208 MiB and 6 ms of preparation) and 3.4 ms of GPU;
+ * - sporadic_coherent: the same with the coherent maintenance (the preparation stays: 6.5-8.5 ms in the kext).
  * The model has no guest-wide stalls, so its intervals over 34 ms stay under the hardware's (org2: 5.4%). */
 static void early_done_scenarios(const char *dir)
 {
@@ -41,6 +42,8 @@ static void early_done_scenarios(const char *dir)
           0, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}, {100, 0, 0}, 0, 0, 0, 0, 0, 0}, 0, 0, 0},
         {{"sporadic", WS_SLOT, 2 * M, 3600 * US, 5, {3 * M, 3 * M, 3 * M}, {4 * M, 4 * M, 4 * M}, {100, 0, 0},
           12 * M, 14 * M, 1 * M, 2 * M, 0, {0, 0, 0}, {0, 0, 0}, {100, 0, 0}, 0, 0, 0, 0, 0, 0}, 0, 0, 0},
+        {{"sporadic_coherent", WS_SLOT, 2 * M, 3600 * US, 5, {3 * M, 3 * M, 3 * M}, {4 * M, 4 * M, 4 * M}, {100, 0, 0},
+          6500 * US, 8500 * US, 300 * US, 700 * US, 0, {0, 0, 0}, {0, 0, 0}, {100, 0, 0}, 0, 0, 0, 0, 0, 0}, 0, 0, 0},
     };
     const unsigned ncases = sizeof cases / sizeof cases[0];
     for (unsigned i = 0; i < ncases; i++) {
