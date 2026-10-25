@@ -108,13 +108,17 @@ static inline int fast_trap_zero_reg(uint64_t reg)
 
 /* The key registers pauth_user_reg models: IA/IB/DA/DB/GA lo/hi, KERNKey
  * (Apple EXTRA) lo/hi and APCTL. tools/test-fast-trap.c checks this predicate
- * against pauth_user_reg over every Op0=3 register tuple. */
+ * against pauth_user_reg over every Op0=3 register tuple. O(1) bitmask check
+ * replaces the 10-iteration nested crm/op2 loop on every EC 0x18 trap. */
 FAST_TRAP_HOT int fast_trap_key_reg(uint64_t reg)
 {
     if(reg==FAST_TRAP_SYSREG(3,4,15,1,0) || reg==FAST_TRAP_SYSREG(3,4,15,1,1) ||
        reg==FAST_TRAP_SYSREG(3,4,15,0,4))return 1;
-    for(unsigned crm=1;crm<=3;crm++)for(unsigned op2=0;op2<(crm<3 ? 4u:2u);op2++)
-        if(reg==FAST_TRAP_SYSREG(3,0,2,crm,op2))return 1;
+    if((reg & ~((UINT64_C(7) << 17) | (UINT64_C(15) << 1))) == FAST_TRAP_SYSREG(3,0,2,0,0)) {
+        unsigned crm = (unsigned)((reg >> 1) & 15u);
+        unsigned op2 = (unsigned)((reg >> 17) & 7u);
+        return (crm == 1u || crm == 2u) ? (op2 < 4u) : (crm == 3u && op2 < 2u);
+    }
     return 0;
 }
 

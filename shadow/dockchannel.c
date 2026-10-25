@@ -144,9 +144,10 @@ int dc_window(const uint64_t *pa, const uint64_t *span, uint64_t count,
     return -1;
 }
 
-/* Which 0x4000 block of window 0, and where inside it. */
-static uint64_t dc_block(uint64_t off) { return off / DC_BLOCK; }
-static uint64_t dc_within(uint64_t off) { return off % DC_BLOCK; }
+/* Which 0x4000 block of window 0, and where inside it. Bitwise shift and mask
+ * replace 64-bit integer division on the hot MMIO trap path. */
+static uint64_t dc_block(uint64_t off) { return off >> 14; }
+static uint64_t dc_within(uint64_t off) { return off & (DC_BLOCK - 1); }
 
 int dc_read(const struct dockchannel *d, int window, uint64_t off,
             uint64_t *value)
