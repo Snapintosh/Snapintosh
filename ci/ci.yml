@@ -1,0 +1,82 @@
+name: Snapintosh CI
+
+on:
+  push:
+    branches: [ main, "perf/**", "fix/**", "feat/**", "ci/**", "feature/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  native-host-tests:
+    name: Native Host Test Suites (ASan & UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang build-essential
+
+      - name: Run Host Test Runner with Sanitizers
+        run: |
+          python3 tools/test_runner.py --json-report build/test_receipt.json
+
+      - name: Upload Test Receipt Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-receipt
+          path: build/test_receipt.json
+
+  compilation-warning-audit:
+    name: Strict Compiler Warning Audit (-Wall -Wextra -Werror)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Clang & GCC
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang
+
+      - name: Audit Shadow MMU and Compat compilation units
+        run: |
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c shadow/mmu.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c shadow/shadow.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c shadow/stage2.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c shadow/dockchannel.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c shadow/native-shared.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c compat/aes.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c compat/early-stop.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c compat/nvme-host.c -o /dev/null
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -Icompat -Ishadow -c compat/service-lock.c -o /dev/null
+
+  cli-and-cycle-verification:
+    name: Cycle Tool & CLI Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify CLI Dashboard & Status
+        run: |
+          python3 tools/cycle.py --help
+          python3 tools/cycle.py dashboard --no-color
+          python3 tools/cycle.py status --check
+          python3 tools/cycle.py next
+          python3 tools/test-cycle-cli.py
