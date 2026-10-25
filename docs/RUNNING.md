@@ -19,6 +19,13 @@ from the Mac with `tools/cycle.py`. Placeholders are in angle brackets.
 - Find the Mac-side network interface that q1n1's USB NCM link created (for
   example with `ifconfig`). Pass it to every hardware command as
   `--device udp://<interface>`. The name changes with the USB port.
+- On q1n1's gadget-NCM link (the one `a16-link-rearm.py arm` brings back after
+  a reset, q1n1's `docs/A16-USB-REARM.md`), run with `Q1N1_UDP_RETRIES=2` in
+  the environment. A memory write that loses a datagram is then
+  resynchronised and repeated by q1n1's Link, and the control guard records
+  each loss (`transport_loss`, `transport_loss_recovered` in the launch
+  record's `control_guard` events) instead of freezing the session. Any other
+  transport failure, and a write that still fails, freezes it as before.
 - Create `tools/cycle_lib/pins.json` from `tools/cycle_lib/pins.example.json`
   and fill in the device and stage hashes ([BUILDING.md](BUILDING.md)).
 
