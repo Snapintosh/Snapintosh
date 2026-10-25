@@ -45,7 +45,7 @@ int stage2_readonly(struct shadow *s, uint64_t lo, uint64_t hi, int validate_onl
 
 int stage2_build(struct shadow *s, const struct stage2_range *ranges, unsigned count)
 {
-    if (!count || s->txsz < 16 || s->txsz > 39) return STAGE2_BAD_RANGES;
+    if (!s || !ranges || !count || s->txsz < 16 || s->txsz > 39) return STAGE2_BAD_RANGES;
     uint64_t limit = 1UL << (64 - s->txsz);
     for (unsigned n = 0; n < count; n++) {
         const struct stage2_range *r = &ranges[n];
@@ -88,6 +88,7 @@ static int split_block(struct shadow *s, uint64_t slot, uint64_t block, uint64_t
 
 uint64_t stage2_split(struct shadow *s, uint64_t ipa)
 {
+    if (!s || !s->read || !s->write || !s->alloc) return 0;
     int start = mmu_start_level(G, s->txsz);
     if (start < 0 || start > 2) return 0;
     uint64_t address = ipa & ((1UL << (64 - s->txsz)) - 1);

@@ -79,6 +79,7 @@ int aes_hardware_supported(uint64_t isar0)
  * restored last; the saved copy is cleared afterwards. */
 static void block_hardware(const struct aes_key *key,const uint8_t input[16],uint8_t output[16])
 {
+#if defined(__aarch64__)
     uint8_t saved[32] __attribute__((aligned(16)));
     const uint8_t *round_key=key->round_key;uint64_t rounds=key->rounds;
     __asm__ volatile(
@@ -97,6 +98,10 @@ static void block_hardware(const struct aes_key *key,const uint8_t input[16],uin
         :[in]"r"(input),[out]"r"(output),[saved]"r"(saved)
         :"memory","cc");
     aes_clear(saved,sizeof(saved));
+#else
+    /* Software fallback on non-ARM64 host validation machines */
+    aes_block(key,input,output,0);
+#endif
 }
 static int valid(const struct aes_key *key,const uint8_t *input,const uint8_t *output,int decrypt)
 {
@@ -118,11 +123,13 @@ int aes_block(const struct aes_key *key,const uint8_t input[16],uint8_t output[1
     add_key(s,key->round_key+(decrypt ? key->rounds*16 : 0));
     for (unsigned round=1;round<=key->rounds;round++) {
         if (decrypt) {
-            shift(s,1);for (unsigned i=0;i<16;i++) s[i]=unsub(s[i]);
+            shift(s,1);
+            for (unsigned i=0;i<16;i++) s[i]=unsub(s[i]);
             add_key(s,key->round_key+(key->rounds-round)*16);
             if (round<key->rounds) mix(s,1);
         } else {
-            for (unsigned i=0;i<16;i++) s[i]=sub(s[i]);shift(s,0);
+            for (unsigned i=0;i<16;i++) s[i]=sub(s[i]);
+            shift(s,0);
             if (round<key->rounds) mix(s,0);
             add_key(s,key->round_key+round*16);
         }

@@ -141,7 +141,7 @@ static void test_stores(void)
         uint64_t before=ns.group[g].leaves,old=word(guest_of[0]+8UL*j);
         wr(0,guest_of[0]+8UL*j,next);
         CHECK(native_shared_store(&ns,&group_writer,g,va,next));
-        CHECK(ns.group[g].leaves==before+(!old && next)-(old && !next));
+        CHECK(ns.group[g].leaves==(before+(!old && next))-(old && !next));
     }
     CHECK(native_shared_verify(&ns,&group_writer,g,rd,0));
     CHECK(root_matches(&roots[0],g) && root_matches(&roots[1],g));
@@ -246,7 +246,7 @@ static void test_lazy_pages(void)
     CHECK(native_shared_link(&ns,&roots[2],2,g) && root_matches(&roots[2],g));
     CHECK(native_shared_unlink(&ns,&roots[2],2,g) && unmapped(&roots[2],base) && links(&ns,g)==2);
     /* A group whose table has no leaf at all takes no page. */
-    uint64_t empty=EMPTY+(UINT64_C(NATIVE_SHARED_GROUPS+8)<<14);
+    uint64_t empty=EMPTY+(((uint64_t)NATIVE_SHARED_GROUPS+8)<<14);
     int e=native_shared_create(&ns,&group_writer,UINT64_C(0x81234c000),empty,UINT64_C(0x184000000),rd,0,rel,0);
     CHECK(e>=0 && !pages_of(&ns,e) && native_shared_link(&ns,&roots[0],0,e) && native_shared_linked(&ns,&roots[0],e));
     CHECK(unmapped(&roots[0],UINT64_C(0x184000000)) && native_shared_verify(&ns,&group_writer,e,rd,0));

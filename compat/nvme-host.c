@@ -41,6 +41,7 @@ static uint64_t rd64(const struct nvmeh_ops *o, uint64_t pa)
 int nvmeh_adopt(const struct nvmeh_ops *o, const struct nvmeh_params *p, struct nvmeh_state *s,
                 uint64_t mem_low, uint64_t mem_high)
 {
+    if (!o || !p || !s) return NVMEH_E_PARAMS;
     uint64_t end = p->dma_base + NVMEH_WINDOW_BYTES;
     int e = NVMEH_E_PARAMS;
     /* What a wrong word would turn into a stray DMA or a read outside the window. */
@@ -250,6 +251,7 @@ int nvmeh_submit(const struct nvmeh_ops *o, const struct nvmeh_params *p, struct
 int nvmeh_reap(const struct nvmeh_ops *o, const struct nvmeh_params *p, struct nvmeh_state *s,
                struct nvmeh_flight *f)
 {
+    if (!o || !p || !s || !f) return NVMEH_E_PARAMS;
     if (!f->active) return NVMEH_E_BUSY;
     uint64_t cqe = p->dma_base + NVMEH_IOCQ + s->head * 16, ticks;
     CLEAN(o, cqe, 16);
@@ -290,6 +292,7 @@ int nvmeh_reap(const struct nvmeh_ops *o, const struct nvmeh_params *p, struct n
 
 int nvmeh_ready(const struct nvmeh_ops *o, const struct nvmeh_params *p, const struct nvmeh_state *s)
 {
+    if (!o || !p || !s) return 0;
     uint64_t cqe = p->dma_base + NVMEH_IOCQ + (s->head % NVMEH_IO_ENTRIES) * 16;
     CLEAN(o, cqe, 16);
     return (int)((RD(o, cqe + 12) >> 16) & 1) == (int)(s->phase & 1);

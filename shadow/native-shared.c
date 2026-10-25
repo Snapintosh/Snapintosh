@@ -210,7 +210,8 @@ int native_shared_link(struct native_shared *ns,struct shadow *s,unsigned slot,i
     uint64_t table;
     if(!live(ns,g) || !s || !s->read || !s->write || slot>=NATIVE_SHARED_SLOTS ||
        native_shared_slot_links(ns,slot,g) || shadow_table(s,2,ns->group[g].va,&table)) {
-        if(ns)ns->errors++;return 0;
+        if(ns)ns->errors++;
+        return 0;
     }
     const struct native_shared_group *grp=&ns->group[g];
     unsigned first=mmu_index(12,2,grp->va);
@@ -227,7 +228,8 @@ int native_shared_unlink(struct native_shared *ns,struct shadow *s,unsigned slot
     uint64_t table;
     if(!live(ns,g) || !s || !s->write || !native_shared_slot_links(ns,slot,g) ||
        !native_shared_linked(ns,s,g) || !level2(s,ns->group[g].va,&table)) {
-        if(ns)ns->errors++;return 0;
+        if(ns)ns->errors++;
+        return 0;
     }
     unsigned first=mmu_index(12,2,ns->group[g].va);
     for(unsigned i=0;i<NATIVE_SHARED_PAGES;i++)if(ns->group[g].pages[i])
@@ -247,7 +249,8 @@ int native_shared_free(struct native_shared *ns,int g,void (*release)(void *,uin
 {
     if(!live(ns,g) || !release || NATIVE_SHARED_SLOTS_ANY(ns->group[g].slots) ||
        !index_remove(ns,ns->group[g].guest)) {
-        if(ns)ns->errors++;return 0;
+        if(ns)ns->errors++;
+        return 0;
     }
     for(unsigned p=0;p<NATIVE_SHARED_PAGES;p++)if(ns->group[g].pages[p])release(ctx,ns->group[g].pages[p]);
     ns->group[g]=(struct native_shared_group){0};ns->live--;ns->freed++;
