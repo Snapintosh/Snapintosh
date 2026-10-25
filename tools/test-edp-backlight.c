@@ -242,6 +242,54 @@ static void test_curve(void)
     CHECK(edp_bl_nits_to_level(edp_bl_slider_to_nits(65536, lo, Q(500)), maxn, floor, max) == max);
 }
 
+/* A swap record's brightness double as 16.16 nits: bit-exact against the host's own double arithmetic, refusing what
+ * names no brightness, capped, and never trusting the bits to be a sensible number. */
+static uint64_t bits_of(double d) { uint64_t b; memcpy(&b, &d, sizeof b); return b; }
+static void test_swap_double(void)
+{
+    const uint64_t cap = (uint64_t)EDP_BL_NITS_LIMIT_MAX << 16;
+    uint64_t q = 12345;
+    static const double exact[] = {0.0, 1.0, 5.0, 10.015, 140.0, 174.89, 384.615, 499.999, 500.0, 0.5, 1.0 / 65536,
+                                   1.5 / 65536, 0.49 / 65536, 1e-300, 999.99998};
+    for (unsigned i = 0; i < sizeof exact / sizeof exact[0]; i++) {
+        double diff;
+        CHECK(edp_bl_double_to_q16(bits_of(exact[i]), cap, &q) == 0);
+        diff = (double)q - exact[i] * 65536.0;
+        CHECK(diff <= 0.5 && diff >= -0.5);
+    }
+    CHECK(edp_bl_double_to_q16(bits_of(140.0), cap, &q) == 0 && q == 140ull << 16);
+    CHECK(edp_bl_double_to_q16(bits_of(-0.0), cap, &q) == 0 && q == 0);
+    CHECK(edp_bl_double_to_q16(bits_of(4.9e-324), cap, &q) == 0 && q == 0);           /* subnormal */
+    CHECK(edp_bl_double_to_q16(bits_of(1000.5), cap, &q) == 0 && q == cap);
+    CHECK(edp_bl_double_to_q16(bits_of(1e300), cap, &q) == 0 && q == cap);
+    CHECK(edp_bl_double_to_q16(bits_of(68719476736.0), cap, &q) == 0 && q == cap);   /* 2^36: the shifted branch */
+    CHECK(edp_bl_double_to_q16(bits_of(1e300), UINT64_MAX, &q) == 0 && q == UINT64_MAX);
+    CHECK(edp_bl_double_to_q16(bits_of(68719476736.0), UINT64_MAX, &q) == 0 && q == 1ull << 52);
+    q = 777;
+    CHECK(edp_bl_double_to_q16(0x7ff8000000000000ull, cap, &q) == -1 && q == 777);    /* the NaN CoreAnimation logs */
+    CHECK(edp_bl_double_to_q16(0x7ff0000000000001ull, cap, &q) == -1);                /* signalling NaN */
+    CHECK(edp_bl_double_to_q16(0x7ff0000000000000ull, cap, &q) == -1);                /* +inf */
+    CHECK(edp_bl_double_to_q16(0xfff0000000000000ull, cap, &q) == -1);                /* -inf */
+    CHECK(edp_bl_double_to_q16(bits_of(-1.0), cap, &q) == -1 && edp_bl_double_to_q16(bits_of(-1e-300), cap, &q) == -1);
+    /* Every exponent and a spread of mantissas: monotonic in the value, never above the cap, rounding within half a
+     * step of the host's arithmetic. */
+    uint64_t seed = 0x9e3779b97f4a7c15ull, prev = 0;
+    for (uint32_t e = 0; e < 0x7ff; e++) {
+        for (unsigned k = 0; k < 8; k++) {
+            seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+            uint64_t frac = k == 0 ? 0 : k == 1 ? (1ull << 52) - 1 : seed >> 12;
+            uint64_t b = (uint64_t)e << 52 | frac;
+            double d;
+            memcpy(&d, &b, sizeof d);
+            CHECK(edp_bl_double_to_q16(b, cap, &q) == 0 && q <= cap);
+            double want = d * 65536.0;
+            if (want < (double)cap) CHECK((double)q >= want - 0.5 && (double)q <= want + 0.5);
+            else CHECK(q == cap);
+            if (k == 0) { CHECK(q >= prev); prev = q; }
+        }
+    }
+}
+
 static void test_helpers(void)
 {
     uint32_t bits = 0;
@@ -272,6 +320,7 @@ static void test_helpers(void)
     CHECK(edp_bl_encode(0x5A3, 1, b) == 2 && b[0] == 0x05 && b[1] == 0xA3 && edp_bl_decode(b, 1) == 0x5A3);
     CHECK(edp_bl_encode(0xC8, 0, b) == 1 && b[0] == 0xC8 && edp_bl_decode(b, 0) == 0xC8);
     test_curve();
+    test_swap_double();
     uint8_t caps[4] = {0x03, 0x07, 0x06, 0x10};
     uint64_t x1 = edp_bl_reply_x1(EDP_BL_STATE_MODE, EDP_BL_DETAIL_BITS, caps, 0x12);
     CHECK(edp_bl_reply_abi(x1) == EDP_BL_ABI && edp_bl_reply_state(x1) == EDP_BL_STATE_MODE &&
