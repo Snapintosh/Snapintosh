@@ -57,6 +57,16 @@
 /* agents/present-pacing FAILURE-MODES.md: the b12v17 pipeline with its submit lock, and the relatch (relatch_scenarios) */
 #include "../gpu/adreno-kext/kext/src/AdrenoDisplayRelatch.h"
 #endif
+#ifndef ADRENO_PRESENT_EARLY_DONE
+#define ADRENO_PRESENT_EARLY_DONE 0
+#endif
+#if ADRENO_PRESENT_EARLY_DONE
+#if !ADRENO_PRESENT_RELATCH
+#error "the early-completion scenarios run in the present-pacing world (-DADRENO_PRESENT_RELATCH=1)"
+#endif
+/* AdrenoDisplayEarlyDone.h: a layer-0 swap completed right after its copy, always or while WindowServer is behind (early_done_scenarios) */
+#include "../gpu/adreno-kext/kext/src/AdrenoDisplayEarlyDone.h"
+#endif
 
 enum { WS_SLOT = 0, WS_EVENT = 1, WS_TIMER = 2, WS_FREE = 3 };
 enum { LP_BEAM = 0, LP_LATCH = 1, LP_HOLD = 2, LP_HOLD_NOGATE = 3 };
@@ -143,6 +153,10 @@ struct lworld {
     int rl_on, urgent; struct adreno_relatch rl; uint64_t rl_at; uint32_t rl_cand;
     uint64_t c_ovl, c_tmr, c_pre, c_ast, c_app, c_apps, c_polls, c_late_unmark;
     uint64_t ret_at[LMAX];                                /* the submission's return: G1 busy until then, S returns then */
+#endif
+#if ADRENO_PRESENT_EARLY_DONE
+    /* AdrenoDisplay's fEarly: mode = complete_at_copy (1 always, as the pipeline what-if; 2 adaptive), its hold */
+    struct adreno_early_done ed; uint64_t ed_hold;
 #endif
 };
 
@@ -334,13 +348,25 @@ static void l_present(struct lworld *l, uint32_t id, uint8_t layers)   /* presen
     l->presented = 1;
     if (layers & 1) l_copy(l, id);
 #if ADRENO_PIPELINE
+#if ADRENO_PRESENT_EARLY_DONE
+    /* earlyDoneNowGated by mode (1 is also gpu-pipeline's what-if, whose hold rows keep it: the kext refuses the hold
+     * with early completion, the early-completion scenarios never run the hold) */
+    if ((layers & 1) && l->complete_at_copy && adreno_early_active(&l->ed, l->w.now)) {
+        l->early_done = id; adreno_early_completed(&l->ed); ws_completed(l, id);
+    }
+#else
     if ((layers & 1) && l->complete_at_copy) { l->early_done = id; ws_completed(l, id); }   /* what-if */
+#endif
 #endif
 }
 static void l_pop(struct lworld *l) { memmove(l->q, l->q + 1, (l->qn - 1) * sizeof l->q[0]); l->qn--; }
 static void l_swap_begin(struct lworld *l, int in_tick)       /* swap_begin_gated */
 {
     struct bworld *w = &l->w;
+#if ADRENO_PRESENT_EARLY_DONE
+    if (!in_tick && l->qn && !l->pending_since && (l->q[0].layers & 1))
+        adreno_early_arrival(&l->ed, w->now, l->qn == 1);                            /* swap_begin_gated, F1's read */
+#endif
     if (!in_tick && l->qn && !l->pending_since) l->pending_since = w->now;          /* F1 */
 #if ADRENO_LATCH
     if (!in_tick && l->pending_since && l->h.released_at) adreno_hold_arrival(&l->h, tb(w, l->pending_since));
@@ -463,11 +489,18 @@ static void l_tick(struct lworld *l)                         /* vsyncGated */
     if (!held) {
         if (l->rel_armed && l->cur && l->presented) l->rel_armed = 0;
 #endif
+#if ADRENO_PRESENT_EARLY_DONE
+    const int ed_had = l->cur && l->presented && (l->cur_layers & 1);   /* completed here, or held since its copy */
+    const uint64_t ed_copies = l->copies;
+#endif
     if (l->cur && l->presented) l_complete(l);
     w->in_tick = 1;
     if (l_gate(l)) { l->gated++; l_arm(l); } else l_swap_begin(l, 1);
 #if ADRENO_PRESENT_RELATCH
     if (l->p2) p2_relatch_arm(l);                            /* RL4: the GO's frame unused and its head deferred */
+#endif
+#if ADRENO_PRESENT_EARLY_DONE
+    adreno_early_tick(&l->ed, w->now, ed_had, l->copies != ed_copies || (l->qn && (l->q[0].layers & 1)));
 #endif
     w->b.go_row0 = 0; w->in_tick = 0;
 #if ADRENO_LATCH
@@ -545,6 +578,9 @@ static void l_start(struct lworld *l)
     adreno_beam_latch(&w->b, l->policy == LP_BEAM ? 0 : 3 * ms);
     adreno_hold_init(&l->h, l->policy == LP_HOLD || l->policy == LP_HOLD_NOGATE, ms * 3 / 2, ms * ADRENO_HOLD_FLOOR_US / 1000);
     l->gate_ns = l->policy == LP_LATCH || l->policy == LP_HOLD ? 4 * MS : 0;
+#endif
+#if ADRENO_PRESENT_EARLY_DONE
+    adreno_early_init(&l->ed, (uint32_t)l->complete_at_copy, 16666667, l->ed_hold ? l->ed_hold : 2000 * MS, MS);
 #endif
     l->started_at = w->now;
     if (l->ws_kind == WS_EVENT) l->events = 1;
