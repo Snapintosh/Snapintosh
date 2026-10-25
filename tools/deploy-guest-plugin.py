@@ -113,6 +113,10 @@ MIRRORSLAB = ROOT / 'build/current-assets/metal-stage-mirrorslab-20261021'
 # inside System Settings panes; multi-input kernels only when the kext publishes AdrenoIBComputeSamplers): only the
 # executable changes, over the mirror-slab 758535d9; runtime v7 and its CodeResources stay installed.
 SETTINGSICONS = ROOT / 'build/current-assets/metal-stage-settingsicons-20261024'
+# Iconfix set (SnapMetal icon-pixels-next: ADRENO_SETTINGS_ICONS plus ADRENO_CS_TABLES, built with ADRENO_LENIENT=1
+# ADRENO_PIPELINE=1 and runtime v7: CoreImage's compute kernels get Mesa's SP_CS_CONFIG texture/sampler/UAV counts):
+# only the executable changes, over the settings-icons 378ff525; runtime v7 and its CodeResources stay installed.
+ICONFIX = ROOT / 'build/current-assets/metal-stage-iconfix-20261024'
 PREVIOUS = ASSETS
 ORIGINAL = ROOT / 'build/current-assets/metal-stage/AdrenoMetal.bundle/Contents'
 CONTENTS = 'System/Volumes/Data/Library/GPUBundles/AdrenoMetal.bundle/Contents'
@@ -122,9 +126,9 @@ FILES = [   # installed in this order: the executable last
          patch=WSABORT / 'libAdrenoCompiler-059fcc6e.bsdiff', cdhash='ab4ccbd4806696e30cbe8ca6f8ff271e89cea7cd'),
     dict(name='CodeResources', path=f'{CONTENTS}/_CodeSignature/CodeResources',
          base=COMPILESPEED / 'CodeResources', new=WSABORT / 'CodeResources', patch=None, cdhash=None),
-    dict(name='AdrenoMetal', path=f'{CONTENTS}/MacOS/AdrenoMetal', base=MIRRORSLAB / 'AdrenoMetal',
-         new=SETTINGSICONS / 'AdrenoMetal', patch=SETTINGSICONS / 'AdrenoMetal-758535d9.bsdiff',
-         cdhash='c76a4677c74623d78f51f578cc4f2978ea73ff26'),
+    dict(name='AdrenoMetal', path=f'{CONTENTS}/MacOS/AdrenoMetal', base=SETTINGSICONS / 'AdrenoMetal',
+         new=ICONFIX / 'AdrenoMetal', patch=ICONFIX / 'AdrenoMetal-378ff525.bsdiff',
+         cdhash='11d5ff9ae3c796ef3ac5c9fec5853e0f8deaec7b'),
 ]
 PLUGIN, BASE, NEW, NEW_CDHASH = FILES[-1]['path'], FILES[-1]['base'], FILES[-1]['new'], FILES[-1]['cdhash']
 WORK = 'System/Volumes/Data/private/var/tmp/snapintosh-plugin'
