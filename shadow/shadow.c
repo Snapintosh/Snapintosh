@@ -55,10 +55,14 @@ int shadow_reserve(struct shadow *s, uint64_t va, uint64_t size)
     if (!s || !s->alloc || !s->read || !s->write || s->txsz < 16 || s->txsz > 39 ||
         !size || ((va | size) & 0xfff) || va >= (1UL << (64-s->txsz)) ||
         size > (1UL << (64-s->txsz))-va) return -1;
+    uint64_t cached_l3_table = 0, cached_l3_base = UINT64_MAX;
     for (uint64_t at=va; at<va+size; at+=0x1000) {
-        uint64_t table, value;
-        if (descend(s,3,at,&table) ||
-            s->read(s->ctx,table+8UL*mmu_index(12,3,at),&value) || value) return -1;
+        uint64_t value, l3_base = at & ~((1ULL << 21) - 1);
+        if (!cached_l3_table || cached_l3_base != l3_base) {
+            if (descend(s,3,at,&cached_l3_table)) return -1;
+            cached_l3_base = l3_base;
+        }
+        if (s->read(s->ctx,cached_l3_table+8UL*mmu_index(12,3,at),&value) || value) return -1;
     }
     return 0;
 }
@@ -66,7 +70,12 @@ int shadow_reserve(struct shadow *s, uint64_t va, uint64_t size)
 int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
                uint64_t low, uint64_t upper)
 {
+    if (!s || !s->read || !s->write || !s->alloc || s->txsz < 16 || s->txsz > 39) return -1;
     if ((va | pa | size) & 0xfff) return -1;
+    if (!size) return 0;
+
+    uint64_t limit = 1ULL << (64 - s->txsz);
+    if (va >= limit || size > limit - va) return -1;
 
     /* The contiguous hint describes a run of 16 entries in the granule that
      * declared it. Carrying it across granules would promise the TLB a
@@ -74,6 +83,11 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
     low &= PT_LEAF_ATTRS;
     upper &= PT_LEAF_UPPER;
     if (s->admit && !s->admit(s->ctx,va,pa,size,low,upper)) return -1;
+
+    /* Cache resolved level-3 table PA within each 2 MiB VA span so consecutive
+     * 4 KiB page insertions bypass repeated L0->L2 root descents. */
+    uint64_t cached_l3_table = 0;
+    uint64_t cached_l3_base = UINT64_MAX;
 
     while (size) {
         uint32_t level = 3;
@@ -92,8 +106,20 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
 
         /* Level 3 leaves set bit 1; blocks at levels 1 and 2 clear it. */
         uint64_t descriptor = (pa & PT_OA_MASK) | low | upper | PT_VALID;
-        if (level == 3) descriptor |= PT_TABLE;
-        if (put(s, level, va, descriptor)) return -1;
+        if (level == 3) {
+            descriptor |= PT_TABLE;
+            uint64_t l3_base = va & ~((1ULL << 21) - 1);
+            if (!cached_l3_table || cached_l3_base != l3_base) {
+                if (descend(s, 3, va, &cached_l3_table)) return -1;
+                cached_l3_base = l3_base;
+            }
+            if (s->write(s->ctx, cached_l3_table + 8UL * mmu_index(G, 3, va), descriptor))
+                return -1;
+        } else {
+            cached_l3_base = UINT64_MAX;
+            cached_l3_table = 0;
+            if (put(s, level, va, descriptor)) return -1;
+        }
 
         va += step;
         pa += step;
@@ -105,7 +131,7 @@ int shadow_map(struct shadow *s, uint64_t va, uint64_t pa, uint64_t size,
 int shadow_insert(struct shadow *s, const struct mmu_leaf *leaf,
                   uint64_t clip_start, uint64_t clip_end)
 {
-    if (!leaf->valid) return SHADOW_NOTHING;
+    if (!s || !leaf || !leaf->valid) return SHADOW_NOTHING;
 
     uint64_t start = leaf->base, end = leaf->base + leaf->size;
     if (start < clip_start) start = clip_start;
@@ -130,6 +156,7 @@ int shadow_unmap(struct shadow *s, uint64_t va, uint64_t size, int check_only)
     /* Validate every removal before touching the first descriptor. */
     for (unsigned pass=0; pass<(check_only ? 1u : 2u); pass++) {
         uint64_t at=va, end=va+size;
+        uint64_t cached_l3_table = 0, cached_l3_base = UINT64_MAX;
         while (at<end) {
             struct mmu_leaf leaf;
             if (mmu_walk(&cfg,at,s->read,s->ctx,&leaf)) return -1;
@@ -139,8 +166,19 @@ int shadow_unmap(struct shadow *s, uint64_t va, uint64_t size, int check_only)
                 if (at!=leaf.base || next>end) return -1;
                 if (pass) {
                     uint64_t table;
-                    if (descend(s,leaf.level,at,&table) ||
-                        s->write(s->ctx,table+8UL*mmu_index(12,leaf.level,at),0)) return -1;
+                    if (leaf.level == 3) {
+                        uint64_t l3_base = at & ~((1ULL << 21) - 1);
+                        if (!cached_l3_table || cached_l3_base != l3_base) {
+                            if (descend(s, 3, at, &cached_l3_table)) return -1;
+                            cached_l3_base = l3_base;
+                        }
+                        table = cached_l3_table;
+                    } else {
+                        cached_l3_table = 0;
+                        cached_l3_base = UINT64_MAX;
+                        if (descend(s,leaf.level,at,&table)) return -1;
+                    }
+                    if (s->write(s->ctx,table+8UL*mmu_index(12,leaf.level,at),0)) return -1;
                 }
             }
             at=next;
