@@ -1153,6 +1153,9 @@ int main(int argc,char **argv) {
 #endif
 #if ADRENO_PRESENT_RELATCH
     relatch_scenarios(argv[1]);
+#if ADRENO_PRESENT_EARLY_DONE
+    early_done_scenarios(argv[1]);
+#endif
 #endif
 #endif
 #endif

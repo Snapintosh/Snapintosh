@@ -277,8 +277,19 @@ struct rres {
     uint64_t copies, iv[5], over34_pm, cps_x10, defer, swaps, max_wait_us, gpu_frames, marked, apps;
     uint64_t ovl, tmr, pre, ast, app_fin, polls, rl_armed, rl_go, rl_late, rl_gone, rl_gated, rl_ovt, rl_polls, rl_lead_min_us;
     uint64_t hist[ADRENO_RELATCH_BINS];
+#if ADRENO_PRESENT_EARLY_DONE
+    struct adreno_early_done ed;                              /* the run's early completions and arrivals (not windowed) */
+#endif
 };
 static FILE *RJ; static int rfirst;
+#if ADRENO_PRESENT_EARLY_DONE
+/* replay-adreno-early-done.c's knobs, all 0 for every row above (their outputs stay byte for byte as without the define):
+ * the swap completed right after its copy (lworld complete_at_copy, AdrenoDisplay's adreno_present_early_done=1),
+ * WindowServer's render spikes, and EP3's assist off (the deployed sparse kext compiles it out). */
+static int rcase_copydone, rcase_noassist;
+static unsigned rcase_spike_pct;
+static uint64_t rcase_spike_min, rcase_spike_max, rcase_ed_hold;
+#endif
 static struct rres r_case(const struct rcase *c, int rp, unsigned swaps, uint64_t guard_us, unsigned seed, const char *tag)
 {
     static struct lworld l;
@@ -297,6 +308,11 @@ static struct rres r_case(const struct rcase *c, int rp, unsigned swaps, uint64_
     l.early = rp == RP_EARLY || rp == RP_EARLY_NOASSIST || rp == RP_ALL || rp == RP_ALL_PIPE2;
     l.assist = l.early && rp != RP_EARLY_NOASSIST ? 250 * US : 0;
     l.tmr_period = 500 * US; l.urgent_period = relatch && rp != RP_RELATCH_NOURGENT ? 100 * US : 0;
+#if ADRENO_PRESENT_EARLY_DONE
+    l.complete_at_copy = rcase_copydone; l.ed_hold = rcase_ed_hold;
+    l.spike_pct = rcase_spike_pct; l.spike_min = rcase_spike_min; l.spike_max = rcase_spike_max;
+    if (rcase_noassist) l.assist = 0;
+#endif
     l.multi_pct = c->multi_pct;
     l.w.stall_pct = c->stall_pct; l.w.stall_min = c->stall_min; l.w.stall_max = c->stall_max;
     l.tmr_at = l.enter_at = l.rl_at = LINF;
@@ -331,6 +347,9 @@ static struct rres r_case(const struct rcase *c, int rp, unsigned swaps, uint64_
     x.rl_armed = l.rl.armed; x.rl_go = l.rl.go; x.rl_late = l.rl.late; x.rl_gone = l.rl.gone; x.rl_gated = l.rl.gated;
     x.rl_ovt = l.rl.ovt; x.rl_polls = l.rl.polls; x.rl_lead_min_us = tb_ns(&l.w, l.w.tb_off + l.rl.lead_min) / 1000;
     memcpy(x.hist, l.rl.hist, sizeof x.hist);
+#if ADRENO_PRESENT_EARLY_DONE
+    x.ed = l.ed;
+#endif
     char name[128]; snprintf(name, sizeof name, "%s_%s_%s%s", c->name, ws_name[c->ws], rp_name[rp], tag ? tag : "");
     const struct lres *r = &x.r;
     fprintf(RJ, "%s\"%s\":{\"frames\":%llu,\"torn\":%llu,\"ovt\":%llu,\"beam_forced\":%llu,\"fps_x10\":%llu,\"copies_x10\":%llu,"
@@ -493,4 +512,7 @@ static void relatch_scenarios(const char *dir)
     printf("{\"relatch_checks\":%u,\"relatch_failures\":%u,\"relatch_cost_checks\":%u,\"relatch_cost_failures\":%u}\n",
            checks - c0, failures - f0, cost_checks - cc0, cost_failures - cf0);
 }
+#if ADRENO_PRESENT_EARLY_DONE
+#include "replay-adreno-early-done.c"
+#endif
 #endif

@@ -244,6 +244,17 @@ INPUT_AUXKC_PTP_DARTPOOL_RESIDENT_BEAM_VA_WIDE_LATCH_SHA = 'ccf0c8f4da4f63fbe25c
 # (57965a84); without --edp-backlight the latch collection above (org-desktop-nocoherent-20261023, ccf0c8f4) is used.
 INPUT_AUXKC_DESKTOP_BACKLIGHT = 'build/current-assets/swap-path-20261024/adreno-input.kc'
 INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA = '9e916a4185bc609178fe80a3110e020d9f3167625da7a76a9bc9ff22412743d5'
+# --edp-backlight with --gpu-coherent or --present-early-done: the --edp-backlight collection rebuilt from
+# SnapAdreno's desktop-early-done profile, i.e. desktop-backlight (desktop's IO-coherent maintenance skipping plus
+# AdrenoBacklight) plus -DADRENO_PRESENT_EARLY_DONE=1 in AdrenoDisplay.o (src/AdrenoDisplayEarlyDone.h: a layer-0 swap
+# completed right after its scanout copy, boot-arg adreno_present_early_done 1 always / 2 while WindowServer is behind,
+# 0 measures only; the perf done line), and SnapI2CHID desktop-fnkeys. Link it with
+# KEXT_PROFILE=desktop-early-done I2C_PROFILE=desktop-fnkeys tools/build-auxkc-desktop.sh NAME (sudo for kmutil's staging)
+# and put the two lines it prints here. Every addition is inert without its switch (the monitor's coherent ON with
+# adreno_coherent=1; adreno_backlight=1; adreno_present_early_done), so the collection also serves --edp-backlight runs
+# without them. None until linked and pinned: those flag sets are refused rather than run on the nocoherent kext.
+INPUT_AUXKC_DESKTOP_EARLY_DONE = None
+INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA = None
 # --guest-net: INPUT_AUXKC's objects with SnapintoshVirtualEthernet's datapath (docs/GUEST-NETWORK-20261019.md).
 # None until that collection is built and pinned; --guest-net refuses meanwhile.
 INPUT_AUXKC_NET = None
@@ -787,6 +798,9 @@ def route_selected(args):
     edp_backlight = getattr(args, 'edp_backlight', False)
     need(not edp_backlight or latch,
          '--edp-backlight needs --present-latch and its chain (its AdrenoX2 is that collection\'s with ADRENO_BACKLIGHT)')
+    early = getattr(args, 'present_early_done', None)
+    need(early is None or edp_backlight,
+         '--present-early-done needs --edp-backlight and its chain (its AdrenoX2 is the early-done collection)')
     need(not (vsync60 and (damage or cached or gpumap)),
          '--present-vsync60 already includes --present-gpumap\'s (and so --present-cached-read\'s) kext: give one of them')
     need(not (damage and cached), '--present-cached-read already includes --present-damage\'s present: give one of them')
@@ -812,6 +826,14 @@ def route_selected(args):
         if vsync60:
             return ((INPUT_TOUCHPAD_PROFILE if touchpad else INPUT_PROFILE), INPUT_AUXKC_VSYNC60,
                     INPUT_AUXKC_VSYNC60_SHA, INPUT_BUNDLES)
+        if dartpool and ptp and resident and beam and va_reclaim and va_wide and latch and edp_backlight and (
+                getattr(args, 'gpu_coherent', False) or early is not None):
+            need(INPUT_AUXKC_DESKTOP_EARLY_DONE is not None and INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA is not None,
+                 '--edp-backlight with --gpu-coherent or --present-early-done: its AuxKC is not pinned yet '
+                 '(INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA; KEXT_PROFILE=desktop-early-done I2C_PROFILE=desktop-fnkeys '
+                 'tools/build-auxkc-desktop.sh NAME links it)')
+            return (INPUT_TOUCHPAD_PROFILE, INPUT_AUXKC_DESKTOP_EARLY_DONE, INPUT_AUXKC_DESKTOP_EARLY_DONE_SHA,
+                    INPUT_BUNDLES)
         if dartpool and ptp and resident and beam and va_reclaim and va_wide and latch and edp_backlight:
             need(INPUT_AUXKC_DESKTOP_BACKLIGHT is not None and INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA is not None,
                  '--edp-backlight: its AuxKC is not pinned yet (INPUT_AUXKC_DESKTOP_BACKLIGHT_SHA; '
@@ -1244,6 +1266,20 @@ def boot_addition(args):
     if active_us is not None:
         need(active_us == 0 or 2000 <= active_us <= 100000, '--input-active-us must be 0 or 2000..100000')
         extra.append(f'snap_i2c_active_us={active_us}')
+    # --present-early-done: AdrenoDisplay's early completion (src/AdrenoDisplayEarlyDone.h), read only by the
+    # desktop-early-done AdrenoX2 that --edp-backlight then selects; the kext turns it off with the release hold.
+    early, early_hold = getattr(args, 'present_early_done', None), getattr(args, 'present_early_hold_ms', None)
+    need(early is None or getattr(args, 'edp_backlight', False),
+         '--present-early-done needs --edp-backlight (the early-done collection is that chain\'s)')
+    need(early is None or early in (0, 1, 2), '--present-early-done is 0 (measure only), 1 (always) or 2 (while behind)')
+    need(early_hold is None or early == 2, '--present-early-hold-ms needs --present-early-done 2')
+    need(not early or hold != 'on', '--present-early-done 1/2 and --present-hold on exclude each other (the hold '
+                                    'keeps the swap current until its release)')
+    if early is not None:
+        extra.append(f'adreno_present_early_done={early}')
+    if early_hold is not None:
+        need(100 <= early_hold <= 10000, '--present-early-hold-ms must be 100..10000')
+        extra.append(f'adreno_present_early_hold_ms={early_hold}')
     # --input-fnkeys: the keyboard's Fn-key layer (drivers/snap-i2c-hid/src/hid-keyboard.h HID_FNKEYS_*), read by a
     # SnapI2CHID built with SNAP_I2C_HID_FNKEYS; the same sets the kext refuses are refused here.
     fnkeys = getattr(args, 'input_fnkeys', None)

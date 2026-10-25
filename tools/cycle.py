@@ -295,6 +295,16 @@ def parse(argv=None):
                    help='with --present-latch: guest boot-arg adreno_hold (default off since b12v11: on completes the swap '
                         'on screen just before the next latch and copies the pending one early; b12v11 showed early '
                         'copies of frames whose IB had not finished)')
+    p.add_argument('--present-early-done', type=int, choices=(0, 1, 2), default=None,
+                   help='with --edp-backlight and its chain: the AuxKC INPUT_AUXKC_DESKTOP_EARLY_DONE and guest '
+                        'boot-arg adreno_present_early_done: AdrenoDisplay completes a layer-0 swap right after its '
+                        'scanout copy instead of at the next tick, so WindowServer\'s two swap entries free a refresh '
+                        'earlier (1 always; 2 only while WindowServer is late, for --present-early-hold-ms after each late '
+                        'frame; 0 measures only). Every mode adds the perf done line (WindowServer\'s arrivals against '
+                        'the ticks). Not with --present-hold on; give it to every mode of the attempt')
+    p.add_argument('--present-early-hold-ms', type=int, default=None,
+                   help='with --present-early-done 2: guest boot-arg adreno_present_early_hold_ms, how long a late frame '
+                        'keeps early completion on (default 2000; 100..10000)')
     p.add_argument('--present-gate-us', type=int, default=None,
                    help='with --present-latch: guest boot-arg adreno_gate_us, the age under which a layer-0 swap is not '
                         'copied while a GPU submission is in the kext (default 4000; 0 = no gate)')
